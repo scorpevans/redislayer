@@ -15,6 +15,6 @@ A redis-inspired framework for interacting transparently with your heterogeneous
 ## Framework
 Redislayer allows the user to list the available database locations, and to cofigure how/where data should be stored/retrieved. Having done this, the user just has to query redislayer with standardized commands; redislayer takes care of the processing and returns a standardized resultset to the user.
 
-The standardization provided by redislayer eliminates the need for refactoring when storage configurations change, and reduces migrations to a function call.
+The standardization provided by redislayer eliminates the need for refactoring when storage configurations change, and reduces migration to a function call.
 
 ## [Example](https://github.com/scorpevans/redislayer/blob/master/nodejs/example.js)
