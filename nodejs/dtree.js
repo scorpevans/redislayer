@@ -51,7 +51,7 @@ var dtree = {
 				previouschain: null,
 				islesscomparator: null},
 		configs: [{
-			id:     'zkey_user',
+			id:	'zkey_user',
 				// KEYTEXT, UID and XID are the storage components of redislayer
 				// KEYTEXT is the table/key/etc which serves as the main storage object
 				// UID is the unique identifier stored, or used to access other stored values

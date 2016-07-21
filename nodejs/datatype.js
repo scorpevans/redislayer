@@ -3,7 +3,7 @@ var utils = require('./utils');
 
 
 	// CONFIGURATIONS
-var 	separator_key = ':',								// separator for parts of keys
+var	separator_key = ':',								// separator for parts of keys
 	separator_detail = '\u0000',							// separator for parts of values i.e. UID and XID
 	collision_breaker = '\u0000?*$#\u0000\u0000?#-*',				// appending this to a UID guarantees it doesn't collide with another
 	offset_id_trail_info = 6,
