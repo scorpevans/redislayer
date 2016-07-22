@@ -36,8 +36,32 @@ var	separator_key = ':',								// separator for parts of keys
 			});
 
 
+unwrap = function(caller){
+	return caller(access_code);
+}
 
-var datatype = {};
+var command = {};
+
+command.getAscendingOrderLabel = function(){
+	return asc;
+};
+
+command.getDescendingOrderLabel = function(){
+	return desc;
+};
+
+command.toRedis = function(cmd){
+	return unwrap(cmd).val;
+};
+
+command.getType = function(cmd){
+	return unwrap(cmd).type;
+};
+
+command.getOrder = function(cmd){
+	return unwrap(cmd).order;
+};
+
 
 var structure = {
 	// CRUD
@@ -59,7 +83,8 @@ var structure = {
 					get: {type: 'getk', val: 'get'},
 					mget: {type: 'getmk', val: 'mget'},
 					upsert: {type: 'upsertk', val: 'set'},
-			 		del: {type: 'delk', val: 'del'}}],
+			 		del: {type: 'delk', val: 'del'},
+					incrby: {type: 'incrbyk', val: 'incrby'}}],
 				config: [{}]},
 			hash: {
 				command: [{
@@ -68,7 +93,8 @@ var structure = {
 					mget: {type: 'getmh', val: 'hmget'},
 					upsert: {type: 'upserth', val: 'hmset'},
 					del: {type: 'delh', val: 'hdel'},
-					incrby: {type: 'incrbyh', val: 'hincrby'}}],
+					incrby: {type: 'incrbyh', val: 'hincrby'},
+					incrbyfloat: {type: 'incrbyfloath', val: 'hincrbyfloat'}}],
 				config: [{}]},
 			zset: {
 				command: [{
@@ -76,6 +102,7 @@ var structure = {
 					get: {type: 'getz', val: 'zscore'},
 					upsert: {type: 'upsertz', val: 'zadd'},
 					del: {type: 'delz', val: 'zrem'},
+					incrby: {type: 'incrbyz', val: 'zincrby'},
 					delrange: {	type: 'delrangez', val: 'delrange',
 							mode: [{
 								byrank: {type: 'delrangebyrankz', val: 'zremrangebyrank'},
@@ -111,9 +138,6 @@ var structure = {
 		},
 	};
 
-unwrap = function(caller){
-	return caller(access_code);
-}
 
 getKeyLabelFunction = function(caller, label, field){
 	var obj = unwrap(caller)[label];
@@ -198,11 +222,44 @@ setFieldIsLessThanComparator = function(obj, field){
 	return setKeyLabelFunction(this, label_field_is_less_than_comparator, obj, field);
 };
 
-// default and zset require possibility to set functions
+
+// methods for commands
+// for ClusterInstanceGetter, user may require info of whether command is read or write
+var setterCommandPrefixes = ['add', 'del', 'upsert', 'incr'];
+isWriter = function(){
+	var cmdType = command.getType(this);
+	for(var i=0; i < setterCommandPrefixes.length; i++){
+		var prefix = setterCommandPrefixes[i];
+		if(utils.startsWith(cmdType, prefix)){
+				return true;
+		}
+	}
+	return false;
+};
+
+isReader = function(){
+	return !this.isWriter;
+};
+
+
+// attach methods to structures
 structure[access_code] = {_all: kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter'])};
 structure.datatype.struct[0][access_code] = {_all: ['setClusterInstanceGetter', 'getClusterInstanceGetter'], zset: kcf};
+structure.datatype.struct[0].set.command[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].string.command[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].hash.command[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].set.command[0].count.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].delrange.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].rangeasc.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].rangedesc.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].count.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].rankasc.mode[0][access_code] = ['isWriter', 'isReader'];
+structure.datatype.struct[0].zset.command[0].rankdesc.mode[0][access_code] = ['isWriter', 'isReader'];
 
+// create interface
 datatype = utils.wrap(structure, {api:{}, keyconfig:{}, keywrap:{}}, access_code, null, null, null, null).datatype;
+
 // set defaults
 datatype.setClusterInstanceGetter(default_get_cluster_instance);
 datatype.setFieldMinValueGetter(default_get_field_min_value);
@@ -210,7 +267,6 @@ datatype.setFieldMaxValueGetter(default_get_field_max_value);
 datatype.setFieldNextChainGetter(default_get_next_chain);
 datatype.setFieldPreviousChainGetter(default_get_previous_chain);
 datatype.setFieldIsLessThanComparator(default_is_chain_less_than);
-
 
 datatype.getIdTrailInfoOffset = function(offset){
 	return offset_id_trail_info;
@@ -594,30 +650,6 @@ datatype.getConfigFieldPrefactor = function(config, field_idx){
 };
 
 
-
-var command = {};
-
-command.getAscendingOrderLabel = function(){
-	return asc;
-};
-
-command.getDescendingOrderLabel = function(){
-	return desc;
-};
-
-command.toRedis = function(cmd){
-	return unwrap(cmd).val;
-};
-
-command.getType = function(cmd){
-	return unwrap(cmd).type;
-};
-
-command.getOrder = function(cmd){
-	return unwrap(cmd).order;
-};
-
-
 command.getRangeMode = function(cmd){
 	var cmdType = command.getType(cmd);
 	if(cmdType.slice(-11) == 'byscorelexz'){
@@ -639,36 +671,33 @@ command.isOverRange = function(cmd){
 	return (cmdType.slice(-1) == 'z' && (utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count')));
 };
 
+var xidCommandPrefixes = ['add', 'incr', 'upsert', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
 command.requiresXID = function(cmd){
 	var cmdType = command.getType(cmd);
-	if(  utils.startsWith(cmdType, 'add')
-		|| utils.startsWith(cmdType, 'upsert')
-		|| utils.startsWith(cmdType, 'rangebyscore')
-		|| utils.startsWith(cmdType, 'countbyscore')
-		|| utils.startsWith(cmdType, 'rankbyscore')
-		|| utils.startsWith(cmdType, 'delrangebyscore')
-	){
-		return true;
+	for(var i=0; i < xidCommandPrefixes.length; i++){
+		var prefix = xidCommandPrefixes[i];
+		if(utils.startsWith(cmdType, prefix)){
+			return true;
+		}
 	}
 	return false;
 };
 
+var uidCommandPrefixes = ['add', 'get', 'upsert', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
 command.requiresUID = function(cmd){
 	var cmdType = command.getType(cmd);
-	if(  utils.startsWith(cmdType, 'add')
-		|| utils.startsWith(cmdType, 'get')
-		|| utils.startsWith(cmdType, 'upsert')
-		|| utils.startsWith(cmdType, 'rangebylex')
-		|| utils.startsWith(cmdType, 'countbylex')
-		|| utils.startsWith(cmdType, 'rankbylex')
-		|| utils.startsWith(cmdType, 'delrangebylex')
-	){
-		return true;
+	// string/key struct doesn't take UID
+	if(cmdType.slice(-1) == 'k'){
+		return false;
+	}
+	for(var i=0; i < uidCommandPrefixes.length; i++){
+		var prefix = uidCommandPrefixes[i];
+		if(  utils.startsWith(cmdType, prefix)){
+			return true;
+		}
 	}
 	return false;
 };
-
-datatype.command = command;
 
 
 // internal routines do not rely on external interfaces; just in case the external ones are deprecated
@@ -692,5 +721,6 @@ datatype.getKeyClusterInstanceGetter = function(key){
 	return key.getClusterInstanceGetter();
 };
 
+datatype.command = command;
 
 module.exports = datatype;

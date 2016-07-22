@@ -10,8 +10,11 @@ var dtree = {
 	id:	'datatype',
 	defaultgetter:	{ // see configurations in datatype.js for defaults and examples
 			  /**
-			   * provide a function(cmd, keys, index, args, field)
+			   * provide a function(cmd, keys, index_class, args, field)
 			   * which returns the cluster-instance in which to perform a query
+			   * NB: index_class is similar to index but with the field values replaced with only their keySuffixes
+        		   * 	this groups indexes into equivalent classes of their keyText
+        		   * 	which is necessary to prevent instanceDecisionFunction from making non-contiguous distribution of index
 			   */
 			  clusterinstance: null,
 			  /**

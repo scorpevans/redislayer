@@ -562,7 +562,14 @@ getQueryDBInstance = function(cmd, keys, index, args, field){
 	var key = keys[0];
 	var keyConfig = datatype.getKeyConfig(key);
 	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
-	return instanceDecisionFunction.apply(this, [cmd, keys, index, args, field]);
+	// NB: the index values are replaced with their keySuffixes
+	// this groups indexes into equivalent classes of their keyText
+	// this is necessary to prevent instanceDecisionFunction from making non-contiguous distribution of index
+	var classIndex = {};
+	for(fld in index){
+		classIndex[fld] = datatype.splitConfigFieldValue(keyConfig, fld, index[fld]);
+	}
+	return instanceDecisionFunction.apply(this, [cmd, keys, classIndex, args, field]);
 };
 
 // TODO: limit-offset across keys is not yet supported
