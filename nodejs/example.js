@@ -17,7 +17,7 @@ var dtree = {
 				, offsets: [null, 52, 30, 30]
 				, offsetprependsuid: [false, true, true, true]		// userid=true is crucial; see offsetprependsuid in dtree.js
 				, partitions: [true]
-				, factors: [1000000000000000, 1]			
+				, factors: [10000000000000, 1]			
 				, types: ['integer', 'integer', 'text', 'text']},
 			keys:	[{
 				id:	'key1',

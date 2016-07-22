@@ -632,7 +632,7 @@ datatype.getFactorizedConfigFieldValue = function(config, field, value){
 	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', fieldIndex);
 	var isStrictlyValueField = datatype.isConfigFieldStrictlyUIDPrepend(config, fieldIndex);
 	if(value != null && factor != null && !isStrictlyValueField){
-		return value * factor;
+		return parseInt(value, 10) * factor;
 	}else{
 		return null;
 	}
