@@ -244,7 +244,7 @@ isReader = function(){
 
 // attach methods to structures
 structure[access_code] = {_all: kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter'])};
-structure.datatype.struct[0][access_code] = {_all: ['setClusterInstanceGetter', 'getClusterInstanceGetter'], zset: kcf};
+structure.datatype.struct[0][access_code] = {_all: kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter'])};
 structure.datatype.struct[0].set.command[0][access_code] = ['isWriter', 'isReader'];
 structure.datatype.struct[0].string.command[0][access_code] = ['isWriter', 'isReader'];
 structure.datatype.struct[0].hash.command[0][access_code] = ['isWriter', 'isReader'];
