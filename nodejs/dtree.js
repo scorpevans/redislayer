@@ -80,20 +80,20 @@ var dtree = {
 				 * 	and use a value of '34567'
 				 * NB: offsetted fields are required in all queries since they help define the key to query
 				 */
-			        , offsets: [null, 50+idTrailInfoOffset]
+				, offsets: [null, 50+idTrailInfoOffset]
 				/**
 				 * specify whether the offsetted value should contribute towards the <unique field> stored
 				 * this prop composes the unique-id (UID) of a given object
 				 * WARNING: for this specific config, it is crucial that userid=true; see fieldprependskey
 				 */
-			        , offsetprependsuid: [false, false, true, true]
+				, offsetprependsuid: [false, false, true, true]
 				/**
 				 * mark fields as being partitions, if they should not affect the storage ordering
 				 * e.g. in this case, userid's would be ordered despite the preceding gender field
 				 * it is recommended that partition fields have relatively few possible values
 				 * NB: this prop is not used for partitioning; see instead [offsets] or [fieldprependskey] 
 				 */
-			        , partitions: [true]			// applies only to sorted-sets
+				, partitions: [true]			// applies only to sorted-sets
 				/**
 				 * specify the different factors by which field values should be multiplied, before their summation
 				 * this is used for the scores of redis sorted-sets

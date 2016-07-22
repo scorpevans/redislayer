@@ -26,7 +26,7 @@ redislayer.datatype = {
 	getStruct: datatype.getStruct,
 	/**
 	 * recommended approach to creating multiple configs and keys
-         * @param	{object}	dtree	see dtree.js for sample
+	 * @param	{object}	dtree	see dtree.js for sample
 	 */
 	loadtree: datatype.loadtree,
 	/**

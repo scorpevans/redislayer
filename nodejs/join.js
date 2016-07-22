@@ -7,10 +7,10 @@ var command = datatype.command;
 
 var join = {};
 	// CONFIGURATIONS
-var	label_functions = '_functions',                         // passed function(s) are passed here
-	label_function_args = '_function_args',                 // when functions are passed the args are held here
-	label_attribute_idxs = '_attribute_idxs',               // when function are passed the attribute index location(s) are held here
-	label_cursor_idxs = '_cursor_idxs';                     // when function args are passed, possible cursor location(s) are held here
+var	label_functions = '_functions',			 	// passed function(s) are passed here
+	label_function_args = '_function_args',		 	// when functions are passed the args are held here
+	label_attribute_idxs = '_attribute_idxs',	       	// when function are passed the attribute index location(s) are held here
+	label_cursor_idxs = '_cursor_idxs';		     	// when function args are passed, possible cursor location(s) are held here
 
 var defaultLimit = query.getDefaultBatchLimit();
 var comparatorLabel = query.getComparatorLabel();
@@ -30,7 +30,7 @@ console.log('================== MERGE RANGES =================');
 	var rangeProps = [];
 	for(var i=0; i < ranges.length; i++){
 		rangeProps[i] = {};
-		rangeProps[i].argsCopy = (ranges[i][label_function_args] || []).concat([]);     	            	// make a copy
+		rangeProps[i].argsCopy = (ranges[i][label_function_args] || []).concat([]);     		    	// make a copy
 		var cursorIdx = ranges[i][label_cursor_idxs];
 		rangeProps[i].cursorIdx = cursorIdx;
 		rangeProps[i].cursor = shallowCopy(rangeProps[i].argsCopy[cursorIdx]) || {};				// make a copy

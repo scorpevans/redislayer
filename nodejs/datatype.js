@@ -164,19 +164,19 @@ getClusterInstanceGetter = function(){
 	return getKeyLabelFunction(this, label_cluster_instance_getter, null);
 };
 getFieldMinValueGetter = function(field){
-        return getKeyLabelFunction(this, label_field_min_value_getter, field);
+	return getKeyLabelFunction(this, label_field_min_value_getter, field);
 };
 getFieldMaxValueGetter = function(field){
-        return getKeyLabelFunction(this, label_field_max_value_getter, field);
+	return getKeyLabelFunction(this, label_field_max_value_getter, field);
 };
 getFieldNextChainGetter = function(field){
-        return getKeyLabelFunction(this, label_field_next_chain_getter, field);
+	return getKeyLabelFunction(this, label_field_next_chain_getter, field);
 };
 getFieldPreviousChainGetter = function(field){
-        return getKeyLabelFunction(this, label_field_previous_chain_getter, field);
+	return getKeyLabelFunction(this, label_field_previous_chain_getter, field);
 };
 getFieldIsLessThanComparator = function(field){
-        return getKeyLabelFunction(this, label_field_is_less_than_comparator, field);
+	return getKeyLabelFunction(this, label_field_is_less_than_comparator, field);
 };
 
 setClusterInstanceGetter = function(func){
@@ -266,7 +266,7 @@ datatype.getKey = function(){
 
 
 getIndexConfig = function(){
-        return unwrap(this).indexconfig;
+	return unwrap(this).indexconfig;
 };
 
 datatype.createConfig = function(id, struct, index_config){
@@ -525,19 +525,19 @@ splitID = function (id, offset){
 	offset = (offset != null ? Math.abs(offset) : offset);	// ignore polarity here
 	if(offset == Infinity || offset == null){		// index property not included in key
 		return [null, id];				// '' to allow empty-string concats
-	}else if(offset <= 0 && offset != null){                // index property is not included into score
-                return [id, null];
+	}else if(offset <= 0 && offset != null){		// index property is not included into score
+		return [id, null];
 	}else if(id != null && offset != null){
-                id = id.toString();
-                var num = 0 - offset;
-                var a = id.slice(0, num);
-                var b = id.slice(num);
-                return [a,b];
-        }else if(offset != null){
+		id = id.toString();
+		var num = 0 - offset;
+		var a = id.slice(0, num);
+		var b = id.slice(num);
+		return [a,b];
+	}else if(offset != null){
 		// when id=null return ['', null] for the key and score respectively
 		// '' would force concatenation to key
-                return ['', id];
-        }else{
+		return ['', id];
+	}else{
 		return [null, null];
 	}
 };
@@ -576,7 +576,7 @@ datatype.getFactorizedConfigFieldValue = function(config, field, value){
 	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', fieldIndex);
 	var isStrictlyValueField = datatype.isConfigFieldStrictlyUIDPrepend(config, fieldIndex);
 	if(value != null && factor != null && !isStrictlyValueField){
-        	return value * factor;
+		return value * factor;
 	}else{
 		return null;
 	}
@@ -645,9 +645,9 @@ command.requiresXID = function(cmd){
 		|| utils.startsWith(cmdType, 'upsert')
 		|| utils.startsWith(cmdType, 'rangebyscore')
 		|| utils.startsWith(cmdType, 'countbyscore')
-                || utils.startsWith(cmdType, 'rankbyscore')
-                || utils.startsWith(cmdType, 'delrangebyscore')
-        ){
+		|| utils.startsWith(cmdType, 'rankbyscore')
+		|| utils.startsWith(cmdType, 'delrangebyscore')
+	){
 		return true;
 	}
 	return false;
@@ -660,9 +660,9 @@ command.requiresUID = function(cmd){
 		|| utils.startsWith(cmdType, 'upsert')
 		|| utils.startsWith(cmdType, 'rangebylex')
 		|| utils.startsWith(cmdType, 'countbylex')
-                || utils.startsWith(cmdType, 'rankbylex')
-                || utils.startsWith(cmdType, 'delrangebylex')
-        ){
+		|| utils.startsWith(cmdType, 'rankbylex')
+		|| utils.startsWith(cmdType, 'delrangebylex')
+	){
 		return true;
 	}
 	return false;

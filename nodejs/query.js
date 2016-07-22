@@ -46,8 +46,8 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	var branch = 'branch';
 	var keyBranches = [];
 	var xid = {usual: null, branch: []};
-        var luaArgs = {usual: [], branch: []}; 
-        var keySuffixes = {usual: [], branch: []}; 
+	var luaArgs = {usual: [], branch: []}; 
+	var keySuffixes = {usual: [], branch: []}; 
 	var uidPrefixes = {usual: [], branch: []};
 	var xidPrefixes = {usual: [], branch: []};
 	var keyConfig = datatype.getKeyConfig(key);
@@ -125,8 +125,8 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	// use index=0 of the same structures above to compound progressive values
 	for(var i=1; i < fields.length; i++){		// i=0 is done by virtue of it being used as compound storage
 		var field = fields[i];
-                var fieldIndex = i; 
-                var fieldVal = index[field];
+		var fieldIndex = i; 
+		var fieldVal = index[field];
 		var os = offsets[fieldIndex];
 		var isBranch = datatype.isConfigFieldBranch(keyConfig, fieldIndex);
 		var type = (isBranch ? branch : usual);
@@ -365,7 +365,7 @@ getKeyRangeMaxByProp = function(key, index, score, prop){
 	var max = (index || {}).max;
 	var keyConfig = datatype.getKeyConfig(key);
 	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-        var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
+	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
 	if(score == null){
 		maxScore = '+inf';
 	}else if(prop == null || propFactor == null){
@@ -377,14 +377,14 @@ getKeyRangeMaxByProp = function(key, index, score, prop){
 		var addend = (1+max) * propFactor;
 		maxScore = score - (score % (preFactor || Infinity)) + addend - 1;	// -1 since ranges are inclusive
 	}
-        return maxScore;
+	return maxScore;
 };
 
 getKeyRangeMinByProp = function(key, index, score, prop){
 	var min = (index || {}).min;
 	var keyConfig = datatype.getKeyConfig(key);
 	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-        var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
+	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
 	if(score == null){
 		minScore = '-inf';
 	}else if(prop == null || propFactor == null){
@@ -460,10 +460,10 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 		startMember = tray.join(separator_detail);
 	}
 	if(range_order == asc){
-                startMember = (startMember ? startBound+startMember : '-');
-        }else if(range_order == desc){
-                startMember = (startMember ? '('+startMember : '+');		// '(' since last character was increased/excluded
-        }
+		startMember = (startMember ? startBound+startMember : '-');
+	}else if(range_order == desc){
+		startMember = (startMember ? '('+startMember : '+');		// '(' since last character was increased/excluded
+	}
 	return startMember;
 };
 
@@ -506,10 +506,10 @@ getKeyRangeStopMember = function(range_order, key, index, member){
 		
 	}
 	if(range_order == asc){
-                stopMember = (stopMember ? '('+stopMember : '+');
-        }else if(range_order == desc){
-                stopMember = (stopMember ? '['+stopMember : '-');
-        }
+		stopMember = (stopMember ? '('+stopMember : '+');
+	}else if(range_order == desc){
+		stopMember = (stopMember ? '['+stopMember : '-');
+	}
 	return stopMember;
 };
 
@@ -571,7 +571,7 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 	var key = keys[0];
 	var keyLabels = [datatype.getKeyLabel(key)];
 	var commandType = command.getType(cmd);
-        var keyCommand = command.toRedis(cmd);
+	var keyCommand = command.toRedis(cmd);
 	var suffixes = [];
 	var prefixes = [];
 	var chainedKeySuffixes = [key_suffixes || []];
@@ -696,7 +696,7 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 };
 
 getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args, field, storage_attribute){
-        var key = keys[0];
+	var key = keys[0];
 	var keyConfig = datatype.getKeyConfig(key);
 	var keyLabel = datatype.getKeyLabel(key);
 	var struct = datatype.getConfigStructId(keyConfig);
@@ -733,7 +733,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 					args.unshift(xid);
 				}
 			}
-		        break;
+			break;
 		case 'set':
 		case 'hash':
 			if(utils.startsWith(command.getType(cmd), 'upsert')){
@@ -771,21 +771,21 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 			if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
 				cmd = cmd[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
 			}
-		        // TODO test update function
-		        if(utils.startsWith(command.getType(cmd), 'upsert')){
+			// TODO test update function
+			if(utils.startsWith(command.getType(cmd), 'upsert')){
 				lua = ' local score = redis.call("zscore", KEYS[1], ARGV[1]);'
 					+ 'if score == nil then'
 					+ '    score = 0;'
 					+ 'end;'
 					+ 'local scoreStr = score;'
-			                + 'for i=2, #ARGV, 3 do'			// ARGV[1] is the member i.e. args[0]
-			                + '     local lhs = scoreStr - (scoreStr % ARGV[i+2]);'
-			                + '     local mid = ARGV[i] * ARGV[i+1];'
-			                + '     local rhs = scoreStr % ARGV[i+1];'
-			                + '     scoreStr = lhs + mid + rhs;'
-			                + 'end;'
+					+ 'for i=2, #ARGV, 3 do'			// ARGV[1] is the member i.e. args[0]
+					+ '     local lhs = scoreStr - (scoreStr % ARGV[i+2]);'
+					+ '     local mid = ARGV[i] * ARGV[i+1];'
+					+ '     local rhs = scoreStr % ARGV[i+1];'
+					+ '     scoreStr = lhs + mid + rhs;'
+					+ 'end;'
 					+ 'if score ~= scoreStr then'
-			                + '    return redis.call("zadd", KEYS[1], scoreStr, ARGV[1]);'
+					+ '    return redis.call("zadd", KEYS[1], scoreStr, ARGV[1]);'
 					+ 'else'
 					+ '    return 0;'
 					+ 'end;';
@@ -830,7 +830,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 				// FYI: zrank and zrevrank are symmetric so a single code works!
 				// NB: redis excluding/bound operator is not required/allowed here
 				// 	TODO make use of new _exclusion flag
-		                // so [member] argument can be tweaked for the desired result
+				// so [member] argument can be tweaked for the desired result
 				var limit = attribute.limit;
 				// NB: if startScore must be used, range [prop] must be provided
 				var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
@@ -890,8 +890,8 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
 					var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
-		                	var stopScore = getKeyRangeStopScore(rangeOrder, key, index, xid);
-		                	args.unshift(stopScore);
+					var stopScore = getKeyRangeStopScore(rangeOrder, key, index, xid);
+					args.unshift(stopScore);
 					args.unshift(startScore);
 				}
 			}else if(uid != null){
@@ -902,7 +902,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 					args.unshift(xid || 0);		// || 0 ... typically for zset.lex
 				}
 			}
-		        break;
+			break;
 		default:
 			throw new Error('FATAL: query.query: unknown keytype!!');
 		}
@@ -910,10 +910,10 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 	var keyText = keyLabel+(field != null ? separator_key+field : '')+(keySuffixes != null ? separator_key+keySuffixes : '');
 	if((luaArgs || []).length > 0 && (utils.startsWith(command.getType(cmd), 'upsert')
 		|| utils.startsWith(command.getType(cmd), 'rangebyscorelex') || utils.startsWith(command.getType(cmd), 'rankbyscorelex'))){
-	        luaArgs.unshift(keyText);
-	        luaArgs.unshift(1);
-	        luaArgs.unshift(lua);
-	        args = luaArgs;
+		luaArgs.unshift(keyText);
+		luaArgs.unshift(1);
+		luaArgs.unshift(lua);
+		args = luaArgs;
 		attribute = attribute;
 	}
 	return {command:cmd, keyText:keyText, args:args};
@@ -922,13 +922,13 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 getResultSet = function(cmd, keys, qData_list, then){
 	var ret = {code:1};
 	var len = (qData_list || []).length;
-        var instanceKeySet = {};
-        var key = keys[0];
+	var instanceKeySet = {};
+	var key = keys[0];
 	var keyConfig = datatype.getKeyConfig(key);
 	// PREPROCESS: prepare instanceKeySet for bulk query execution
-        for(var i=0; i < len; i++){
+	for(var i=0; i < len; i++){
 		var elem = qData_list[i];
-                var index = elem.index || {};
+		var index = elem.index || {};
 		// in contrast to args, attributes are placed just after the key before all other args and indexes
 		var attribute = elem.attribute || {};							// limit, offset, nx, etc
 		var storageAttr = parseIndexToStorageAttributes(key, cmd, index);
@@ -955,15 +955,15 @@ getResultSet = function(cmd, keys, qData_list, then){
 				instanceKeySet[dbInstanceFlag] = {_dbinstance: dbInstance, _keytext: {}};
 			}
 			if(!instanceKeySet[dbInstanceFlag]._keytext[keyText]){
-                	        instanceKeySet[dbInstanceFlag]._keytext[keyText] = {};
+				instanceKeySet[dbInstanceFlag]._keytext[keyText] = {};
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].attribute = attribute;
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].field = field;
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].keySuffixes = fsa.keySuffixes;
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].fieldBranchCount = saKeys.length;
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].index = index;
-                	        instanceKeySet[dbInstanceFlag]._keytext[keyText].args = [];
+				instanceKeySet[dbInstanceFlag]._keytext[keyText].args = [];
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].indexes = [];
-                	}
+			}
 			[].push.apply(instanceKeySet[dbInstanceFlag]._keytext[keyText].args, args);
 		}
 	}
@@ -974,16 +974,16 @@ getResultSet = function(cmd, keys, qData_list, then){
 		var dbInstance = instanceKeySet[dbInstanceFlag]._dbinstance;
 		var ks = Object.keys(instanceKeySet[dbInstanceFlag]._keytext);
 		async.each(ks, function(keyText, cb){
-                	var newKeys = instanceKeySet[dbInstanceFlag]._keytext[keyText].newKeys;
+			var newKeys = instanceKeySet[dbInstanceFlag]._keytext[keyText].newKeys;
 			var field = instanceKeySet[dbInstanceFlag]._keytext[keyText].field;
 			var keySuffixes = instanceKeySet[dbInstanceFlag]._keytext[keyText].keySuffixes;
 			var fieldBranchCount = instanceKeySet[dbInstanceFlag]._keytext[keyText].fieldBranchCount;
 			var index = instanceKeySet[dbInstanceFlag]._keytext[keyText].index;
-                	var args = instanceKeySet[dbInstanceFlag]._keytext[keyText].args;
-                	var attribute = instanceKeySet[dbInstanceFlag]._keytext[keyText].attribute;
-                	queryDBInstance(dbInstance, cmd, keys, keyConfig, field, keySuffixes, index, args, attribute, function(err, result){
+			var args = instanceKeySet[dbInstanceFlag]._keytext[keyText].args;
+			var attribute = instanceKeySet[dbInstanceFlag]._keytext[keyText].attribute;
+			queryDBInstance(dbInstance, cmd, keys, keyConfig, field, keySuffixes, index, args, attribute, function(err, result){
 				// POST-PROCESS
-                	        if(!utils.logCodeError(err, result)){
+				if(!utils.logCodeError(err, result)){
 					var withscores = (attribute || {}).withscores;
 					if(Array.isArray(result.data)){
 						var isRangeCommand = command.isOverRange(command);
@@ -1087,13 +1087,13 @@ getResultSet = function(cmd, keys, qData_list, then){
 							}
 						}
 					}
-                	        }
-                	        cb(err);
+				}
+				cb(err);
 			});
-                }, function(err){
+		}, function(err){
 			callback(err);
 		});
-        }, function(err){
+	}, function(err){
 		if(Array.isArray(resultset)){
 			var sortedKeys = Object.keys(resultset || {}).sort(function(a,b){return parseInt(a,10) > parseInt(b, 10);});
 			ret.data = [];
@@ -1105,13 +1105,13 @@ getResultSet = function(cmd, keys, qData_list, then){
 		}
 		// sometimes it's necessary to examined query results; see e.g. join.joinRange
 		ret.keys = keys;
-                if(!utils.logError(err, 'FATAL: query.getResultSet')){
-                        ret.code = 0;
-                }else{
+		if(!utils.logError(err, 'FATAL: query.getResultSet')){
+			ret.code = 0;
+		}else{
 			ret.code = 1;	// announce partial success/failure
 		}
-                then (err, ret);
-        });
+		then (err, ret);
+	});
 }
 shallowCopy = function(myDict){
 	var myClone = {};
