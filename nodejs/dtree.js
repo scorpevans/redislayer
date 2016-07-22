@@ -67,7 +67,8 @@ var dtree = {
 				/**
 				 * specify if the name of the field itself (as opposed to the value) should be appended to the key-label
 				 * this cosmetic helps label keys nicely, and also serves for vertical partitioning
-				 * WARNING! field-branches must always be accompanied by other fields which form a UID
+				 * WARNING! UID should be a unique-identifier without field-branches inclusions
+				 *	in fact, field-branches should not be put into UID; this is a sign of a bad configuration
 				 *	otherwise there's no reference to use to rebuild the object once it is branched for storage
 				 *	see offsetprependsuid
 				 */
@@ -87,8 +88,10 @@ var dtree = {
 				 * specify whether the offsetted value should contribute towards the <unique field> stored
 				 * this prop composes the unique-id (UID) of a given object
 				 * WARNING: for this specific config, it is crucial that userid=true; see fieldprependskey
+				 *	this index-config is a bad one; better would be if the struct=hash and field-branches don't prepend UID
+				 *	with struct=zset, the XID must be a float so we are forced to stow strings in UID
 				 */
-				, offsetprependsuid: [false, false, true, true]
+				, offsetprependsuid: [false, true, true, true]
 				/**
 				 * mark fields as being partitions, if they should not affect the storage ordering
 				 * e.g. in this case, userid's would be ordered despite the preceding gender field

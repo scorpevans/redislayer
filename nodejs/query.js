@@ -58,6 +58,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	// using the defined fields is a better idea than using the currently provided possibly-partial fields
 	// it uniformly treats every index argument with complete field-set, albeit some having NULL values
 	// this is safer; fields have fixed ordering and positions!
+	// for example, note that absent fields may still make an entry in keySuffixes!!
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
 		var fieldIndex =  i;								// datatype.getConfigFieldIdx(keyConfig, field)
