@@ -12,7 +12,7 @@ var	separator_key = ':',								// separator for parts of keys
 	desc = '_label_descending',							// direction of ranging -- typically over sorted-sets
 	access_code = '_do_not_access_fields_with_this',				// used to lock internal-configs or leaf nodes of dicts see utils.wrap
 	label_cluster_instance_getter = '_cluster_instance_function',
-	default_get_cluster_instance = (function(cmd, keys, index, args, field){return cluster.getDefaultInstance();}),
+	default_get_cluster_instance = (function(cmd, keys, field, key_suffixes){return cluster.getDefaultInstance();}),
 	// functions relating to configs with key-suffixes
 	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	label_field_min_value_getter = '_field_min_value_getter_function',		// {field1: function1,..}; see default_get_field_min_value

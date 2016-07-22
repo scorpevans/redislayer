@@ -523,7 +523,6 @@ getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
 		return [];
 	}
 	var key = keys[0];
-	var keySuffixes = key_suffixes[0];
 	// fetch indexes of key-suffix props
 	var props = datatype.getConfigIndexProp(key_type, 'fields');
 	var suffixPropIndexes = [];
@@ -558,21 +557,14 @@ getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
 };
 
 // decide here which database instance should be queried
-getQueryDBInstance = function(cmd, keys, index, args, field){
+getQueryDBInstance = function(cmd, keys, field, key_suffixes){
 	var key = keys[0];
 	var keyConfig = datatype.getKeyConfig(key);
 	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
-	// NB: the index values are replaced with their keySuffixes
-	// this groups indexes into equivalent classes of their keyText
-	// this is necessary to prevent instanceDecisionFunction from making non-contiguous distribution of index
-	var classIndex = {};
-	for(fld in index){
-		classIndex[fld] = datatype.splitConfigFieldValue(keyConfig, fld, index[fld]);
-	}
-	return instanceDecisionFunction.apply(this, [cmd, keys, classIndex, args, field]);
+	return instanceDecisionFunction.apply(this, [cmd, keys, field, key_suffixes]);
 };
 
-// TODO: limit-offset across keys is not yet supported
+// TODO: limit-offset across keyChains is not yet supported
 queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixes, index, args, attribute, then){
 	var ret = {code:1};
 	var key = keys[0];
@@ -612,10 +604,10 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 	var baseCaseDone = false;
 	async.doWhilst(
 	function(callback){
+		var myKeySuffixes = chainedKeySuffixes[idx] || [];
+		var myArgs = chainedArgs[idx];
 		switch(instance.type){
 		default:
-			var myKeySuffixes = chainedKeySuffixes[idx] || [];
-			var myArgs = chainedArgs[idx];
 			var keyTexts = [];
 			if(keyLabels.length > 0){
 				keyTexts.push((keyLabels.concat(keyFieldArray).concat(myKeySuffixes || [])).join(separator_key));
@@ -692,7 +684,14 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 				}
 			}
 		}
-		return (idx < chainedKeySuffixes.length);
+		if(idx < chainedKeySuffixes.length){
+			// recompute instance, since it may have changed with changing keyChains
+			var myKeySuffixes = chainedKeySuffixes[idx] || [];
+			instance = getQueryDBInstance(cmd, keys, key_field, mykeySuffixes);
+			return true;
+		}else{
+			return false;
+		}
 	},
 	function(err){
 		if(!utils.logError(err, 'queryDBInstance')){
@@ -712,7 +711,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 	var uid = storage_attribute.uid;
 	var luaArgs = storage_attribute.luaArgs || [];
 	var keySuffixes = storage_attribute.keySuffixes;
-	switch(cluster.getClusterInstanceType(cluster_instance)){
+	switch(cluster.getInstanceType(cluster_instance)){
 	default:
 		switch(struct){
 		case 'string':
@@ -914,7 +913,6 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 			throw new Error('FATAL: query.query: unknown keytype!!');
 		}
 	}
-	var keyText = keyLabel+(field != null ? separator_key+field : '')+(keySuffixes != null ? separator_key+keySuffixes : '');
 	if((luaArgs || []).length > 0 && (utils.startsWith(command.getType(cmd), 'upsert')
 		|| utils.startsWith(command.getType(cmd), 'rangebyscorelex') || utils.startsWith(command.getType(cmd), 'rankbyscorelex'))){
 		luaArgs.unshift(keyText);
@@ -923,22 +921,24 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 		args = luaArgs;
 		attribute = attribute;
 	}
-	return {command:cmd, keyText:keyText, args:args};
+	return {command:cmd, args:args};
 };
 
-getResultSet = function(cmd, keys, qData_list, then){
+getResultSet = function(original_cmd, keys, qData_list, then){
 	var ret = {code:1};
 	var len = (qData_list || []).length;
 	var instanceKeySet = {};
 	var key = keys[0];
+	var keyLabel = datatype.getKeyLabel(key);
 	var keyConfig = datatype.getKeyConfig(key);
+	var cmd = original_cmd;
 	// PREPROCESS: prepare instanceKeySet for bulk query execution
 	for(var i=0; i < len; i++){
 		var elem = qData_list[i];
 		var index = elem.index || {};
 		// in contrast to args, attributes are placed just after the key before all other args and indexes
 		var attribute = elem.attribute || {};							// limit, offset, nx, etc
-		var storageAttr = parseIndexToStorageAttributes(key, cmd, index);
+		var storageAttr = parseIndexToStorageAttributes(key, original_cmd, index);
 		var saKeys = Object.keys(storageAttr ||{});
 		// process different field-branches
 		for(j=0; j < saKeys.length; j++){
@@ -951,13 +951,12 @@ getResultSet = function(cmd, keys, qData_list, then){
 			if(field == label_lua_nil){
 				field = null;
 			}
-			var dbInstance = getQueryDBInstance(cmd, keys, index, args, field);
-			var dbInstanceArgs = getClusterInstanceQueryArgs(dbInstance, cmd, keys, index, args, field, fsa);
+			var dbInstance = getQueryDBInstance(original_cmd, keys, field, fsa.keySuffixes);
+			var dbInstanceArgs = getClusterInstanceQueryArgs(dbInstance, original_cmd, keys, index, args, field, fsa);
 			cmd = dbInstanceArgs.command;
-			args = dbInstanceArgs.args;
-			var keyText = dbInstanceArgs.keyText;
 			// bulk up the different key-storages for bulk-execution
-			var dbInstanceFlag = dbInstance.label;
+			var dbInstanceFlag = cluster.getInstanceLabel(dbInstance);
+			var keyText = keyLabel+(field != null ? separator_key+field : '')+(fsa.keySuffixes != null ? separator_key+fsa.keySuffixes : '');
 			if(!instanceKeySet[dbInstanceFlag]){
 				instanceKeySet[dbInstanceFlag] = {_dbinstance: dbInstance, _keytext: {}};
 			}
@@ -971,7 +970,7 @@ getResultSet = function(cmd, keys, qData_list, then){
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].args = [];
 				instanceKeySet[dbInstanceFlag]._keytext[keyText].indexes = [];
 			}
-			[].push.apply(instanceKeySet[dbInstanceFlag]._keytext[keyText].args, args);
+			[].push.apply(instanceKeySet[dbInstanceFlag]._keytext[keyText].args, dbInstanceArgs.args);
 		}
 	}
 	var resultset = null;

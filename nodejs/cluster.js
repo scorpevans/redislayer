@@ -8,9 +8,13 @@ var cluster = {};
 	// CONFIGURATIONS
 var	clusterid = '0000',
 	instance = {
-		'0000': {label: 'redis_6379', val: redisDB.createClient(), type: 'redis'},
+		'0000': {id: '0000', label: 'redis_6379', val: redisDB.createClient(), type: 'redis'},
 	},
 	default_instance = instance[clusterid];
+
+cluster.getInstance = function(){
+	return instance;
+};
 
 cluster.getDefaultInstance = function(){
 	return default_instance;
@@ -20,12 +24,16 @@ cluster.getId = function(){
 	return clusterid;
 };
 
-cluster.getClusterInstanceType = function(cluster_instance){
+cluster.getInstanceType = function(cluster_instance){
 	return cluster_instance.type;
 };
 
-cluster.getClusterInstanceByLabel = function(cluster_label){
-	return instance[cluster_label];
+cluster.getInstanceId = function(cluster_instance){
+	return cluster_instance.id;
+};
+
+cluster.getInstanceLabel = function(cluster_instance){
+	return cluster_instance.label;
 };
 
 module.exports = cluster;
