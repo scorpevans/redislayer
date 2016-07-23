@@ -26,7 +26,6 @@ var desc = command.getDescendingOrderLabel();
 // NB: merge joins assume inputs are sorted in the same order
 // TODO encapsulate first 5 parameters into Range dict
 join.mergeRanges = function(range_mode, range_order, ranges, comparator, join_type, limit, then){
-console.log('================== MERGE RANGES =================');
 	var rangeProps = [];
 	for(var i=0; i < ranges.length; i++){
 		rangeProps[i] = {};
@@ -62,11 +61,11 @@ console.log('================== MERGE RANGES =================');
 	async.whilst(
 	function(){return (((isRangeCount && joinData < limit) || joinData.length < limit) && rangeIndexes.length > 0);},
 	function(callback){
-		async.each((refreshIdx != null ? [refreshIdx] : rangeIndexes), function(idx, callback){
+		async.each((refreshIdx != null ? [refreshIdx] : rangeIndexes), function(idx, cb){
 			var next = function(err, result){
 				rangeProps[idx].results = (result || []).data || [];
 				rangeProps[idx].keys = (result || {}).keys;
-				callback(err);
+				cb(err);
 			};
 			var range = ranges[idx];
 			var len = rangeProps[idx].argsCopy.length;

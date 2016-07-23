@@ -39,7 +39,7 @@ var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 
 
-parseIndexToStorageAttributes = function(key, cmd, index){
+parseIndexToStorageAttributes = function(cluster_instance, key, cmd, index){
 	// for <xid>, distinguish between 0 and null for zrangebyscore
 	// that is xid=null would be a hint that zrangebylex should be used instead
 	var usual = 'usual';
@@ -52,18 +52,18 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	var xidPrefixes = {usual: [], branch: []};
 	var keyConfig = datatype.getKeyConfig(key);
 	var struct = datatype.getConfigStructId(keyConfig);
-	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
+	var offsets = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'offsets') || [];
 	var indexFields = Object.keys(index);
-	var fields = datatype.getConfigIndexProp(keyConfig, 'fields') || [];			// fields sorted by index
+	var fields = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'fields') || [];			// fields sorted by index
 	// using the defined fields is a better idea than using the currently provided possibly-partial fields
 	// it uniformly treats every index argument with complete field-set, albeit some having NULL values
 	// this is safer; fields have fixed ordering and positions!
 	// for example, note that absent fields may still make an entry in keySuffixes!!
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
-		var fieldIndex =  i;								// datatype.getConfigFieldIdx(keyConfig, field)
+		var fieldIndex =  i;							// datatype.getConfigFieldIdx(cluster_instance, keyConfig, field)
 		var fieldVal = index[field];
-		var splits = datatype.splitConfigFieldValue(keyConfig, field, fieldVal) || [];
+		var splits = datatype.splitConfigFieldValue(cluster_instance, keyConfig, field, fieldVal) || [];
 		// key suffixes and branches
 		var type = usual;
 		var fld = splits[2];
@@ -80,14 +80,14 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 			keySuffixes[type][fieldIndex] = splits[0];
 		}
 		// xid and uid
-		if(datatype.isConfigFieldUIDPrepend(keyConfig, fieldIndex)){
+		if(datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, fieldIndex)){
 			// use fieldIndex for ordering but remember there may be gaps i.e. ['', ,'234'] to be removed
 			// in case of <null> use empty-string concats in order to prevent order mismatches
 			uidPrefixes[type][fieldIndex] = (splits[1] != null ? splits[1]+'' : '');		// 0 => '0'
 		}
 		if(struct == 'zset'){
 			if(splits[1] != null){
-				var addend = datatype.getFactorizedConfigFieldValue(keyConfig, field, splits[1]);
+				var addend = datatype.getFactorizedConfigFieldValue(cluster_instance, keyConfig, field, splits[1]);
 				if(addend != null){
 					if(type == usual){
 						xid[type] = (xid[type] || 0) + addend;
@@ -101,7 +101,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		// NULLs cannot simply be ignored too
 		// NB: keep in mind storing e.g. details of a person with NULL entries => 'firstname::28:'
 		// the <cmd> seems to be the only hint as to when to ignore <xid>, at least when NULL
-		}else if(!datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){	// i.e. definition of XID vs. UID
+		}else if(!datatype.isConfigFieldStrictlyUIDPrepend(cluster_instance, keyConfig, fieldIndex)){	// i.e. definition of XID vs. UID
 			// non-zsets values/scores/xids just have to be joined
 			xidPrefixes[type][fieldIndex] = (splits[1] != null ? splits[1]+'' : '');
 		}
@@ -112,9 +112,9 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		if(utils.startsWith(command.getType(cmd), 'upsert')){
 			if(struct == 'zset'){
 				if(splits[1] != null){
-					var pvf = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', fieldIndex);
+					var pvf = datatype.getConfigPropFieldIdxValue(cluster_instance, keyConfig, 'factors', fieldIndex);
 					var outOfBounds = 1000*redisMaxScoreFactor;		// just large enough
-					var next_pvf = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex) || outOfBounds;
+					var next_pvf = datatype.getConfigFieldPrefactor(cluster_instance, keyConfig, fieldIndex) || outOfBounds;
 					luaArgs[type][fieldIndex] = [fieldVal, pvf, next_pvf];
 				}
 			}else{
@@ -129,7 +129,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		var fieldIndex = i; 
 		var fieldVal = index[field];
 		var os = offsets[fieldIndex];
-		var isBranch = datatype.isConfigFieldBranch(keyConfig, fieldIndex);
+		var isBranch = datatype.isConfigFieldBranch(cluster_instance, keyConfig, fieldIndex);
 		var type = (isBranch ? branch : usual);
 		var addend = null;
 		if(!isBranch){
@@ -144,7 +144,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 					str[type][0] = addend + str[type][fieldIndex];
 					//  ... and append also to 'branches'
 					for(j=0; j < i; j++){
-						if(datatype.isConfigFieldBranch(keyConfig, j)){
+						if(datatype.isConfigFieldBranch(cluster_instance, keyConfig, j)){
 							addend = (str[branch][j] != null ? str[branch][j] + del : '');
 							str[branch][j] = addend + str[type][fieldIndex];
 						}
@@ -158,7 +158,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 					luaArgs[usual][0] = luaArgs[type][fieldIndex].concat([]);
 				}
 				for(j=0; j < i; j++){
-					if(datatype.isConfigFieldBranch(keyConfig, j)){
+					if(datatype.isConfigFieldBranch(cluster_instance, keyConfig, j)){
 						if(luaArgs[branch][j] != null){
 							[].push.apply(luaArgs[branch][j], luaArgs[type][fieldIndex]);
 						}else{
@@ -199,7 +199,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	var storageAttr = {};
 	for(i=0; i < keyBranches.length; i++){
 		var kb = keyBranches[i];
-		var idx = datatype.getConfigFieldIdx(keyConfig, kb) || 0;	// i.e. branchIndex or compoundIndex
+		var idx = datatype.getConfigFieldIdx(cluster_instance, keyConfig, kb) || 0;	// i.e. branchIndex or compoundIndex
 		var sa = {};
 		sa.keySuffixes = keySuffixes[type][idx];
 		sa.luaArgs = luaArgs[type][idx];
@@ -214,7 +214,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	return storageAttr;
 };
 
-parseStorageAttributesToIndex = function(key, key_text, xid, uid){
+parseStorageAttributesToIndex = function(cluster_instance, key, key_text, xid, uid){
 	// NB: if <xid> is null, <uid> still has to be parsed
 	var index = {};
 	var fld = null;
@@ -222,9 +222,9 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 	var keyConfig = datatype.getKeyConfig(key);
 	var keyLabel = datatype.getKeyLabel(key);
 	var struct = datatype.getConfigStructId(keyConfig);
-	var fields = datatype.getConfigIndexProp(keyConfig, 'fields') || [];
-	var factors = datatype.getConfigIndexProp(keyConfig, 'factors') || [];
-	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
+	var fields = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'fields') || [];
+	var factors = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'factors') || [];
+	var offsets = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'offsets') || [];
 	var keyParts = key_text.split(separator_key);
 	var uidParts = (uid != null ? String(uid).split(separator_detail) : []);
 	var xidParts = (xid != null ? String(xid).split(separator_detail) : []);
@@ -235,7 +235,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 		var field = fields[i];
 		var fieldIndex = i;
 		var fieldOffset = offsets[fieldIndex];
-		if(datatype.isConfigFieldBranch(keyConfig, fieldIndex)){
+		if(datatype.isConfigFieldBranch(cluster_instance, keyConfig, fieldIndex)){
 			// check if string at the leftmost end of keyPrefixes matches this field
 			// if not skip this field
 			if(keySuffixCount == null){		// otherwise use cached count
@@ -247,25 +247,25 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 					// other field-branches are not involved since they are stored separately
 					// for now all field-branches are excluded, and conditionally added later
 					// this is because this code-path runs only once and a cached value is use thereafter
-					if(datatype.isConfigFieldKeySuffix(keyConfig, j)){
+					if(datatype.isConfigFieldKeySuffix(cluster_instance, keyConfig, j)){
 						fkeyPartIndexes[j] = keySuffixCount;					// NB: reverse index
-						if(!datatype.isConfigFieldBranch(keyConfig, j)){
+						if(!datatype.isConfigFieldBranch(cluster_instance, keyConfig, j)){
 							keySuffixCount++;
 						}
 					}
 					// take care to account for no more than a single field-branch
 					// since different field-branches are not stored together
-					if(datatype.isConfigFieldUIDPrepend(keyConfig, j)){
+					if(datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, j)){
 						fuidPartIndexes[j] = uidPrependCount;					// forward index
 						uidPrependCount++;
-						if(datatype.isConfigFieldBranch(keyConfig, j)){
+						if(datatype.isConfigFieldBranch(cluster_instance, keyConfig, j)){
 							uidPrependCount--;
 						}
 					}
 				}
 			}
 			// field-branch value could count towards keySuffixes
-			var mySuffixCount = keySuffixCount + (datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex) ? 1 : 0);
+			var mySuffixCount = keySuffixCount + (datatype.isConfigFieldKeySuffix(cluster_instance, keyConfig, fieldIndex) ? 1 : 0);
 			var keyPrefix = [keyLabel, field].join(separator_key);
 			if(keyPrefix != keyParts.slice(0, 0 - mySuffixCount).join(separator_key)){
 				continue;
@@ -292,14 +292,15 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				fuid = [keyLabel].concat(neutralKeyParts).concat(neutralUIDParts).join(separator_key);
 			}
 		}
-		if(datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){	// can't find it elsewhere
+		if(datatype.isConfigFieldStrictlyUIDPrepend(cluster_instance, keyConfig, fieldIndex)){	// can't find it elsewhere
 			// NB: keys may already have long separated parts; hence count from the lhs
 			// find exact position of this field's addendum
 			// check preceding fields if they have addendums in the uid
 			// NB: critical to have addendums ordered by fieldIndex
 			var uidIndex = 0;
 			for(var h=0; h < fieldIndex; h++){
-				if(datatype.isConfigFieldUIDPrepend(keyConfig, h) && !datatype.isConfigFieldBranch(keyConfig, h)){
+				if(datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, h)
+					&& !datatype.isConfigFieldBranch(cluster_instance, keyConfig, h)){
 					uidIndex++;
 				}
 			}
@@ -309,7 +310,8 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				var xidIndex = 0;
 				// count xid prepends across field-branches => exclude field-branch prepends
 				for(var h=0; h < fieldIndex; h++){
-					if(!datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, h) && !datatype.isConfigFieldBranch(keyConfig, h)){
+					if(!datatype.isConfigFieldStrictlyUIDPrepend(cluster_instance, keyConfig, h)
+						&& !datatype.isConfigFieldBranch(cluster_instance, keyConfig, h)){
 						xidIndex++;
 					}
 				}
@@ -317,7 +319,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 			}else if(factors[fieldIndex] != null){
 				// basic splicing of field's uid from score
 				var fact = factors[fieldIndex];
-				var preFact = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex);
+				var preFact = datatype.getConfigFieldPrefactor(cluster_instance, keyConfig, fieldIndex);
 				var val = Math.floor((preFact ? xid % preFact : xid) / fact);
 				index[field] = val;
 			}
@@ -326,7 +328,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 			continue;
 		}
 		// check if addendums come from the key_text
-		if(datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex)){
+		if(datatype.isConfigFieldKeySuffix(cluster_instance, keyConfig, fieldIndex)){
 			if(key_text != null){
 				// NB: keys may already have long separated parts; hence count from the rhs
 				// find exact position of this field's addendum
@@ -335,14 +337,14 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				var keyIndex = 0;
 				var fieldBranchCounts = 0;
 				for(var h=offsets.length-1; h > fieldIndex; h--){
-					if(datatype.isConfigFieldKeySuffix(keyConfig, h)){
+					if(datatype.isConfigFieldKeySuffix(cluster_instance, keyConfig, h)){
 						// do not count more than a single fieldBranch
 						// since fieldBranches are stored separately
-						if(!datatype.isConfigFieldBranch(keyConfig, h) || (fieldBranchCounts == 0
-							&& (!datatype.isConfigFieldBranch(keyConfig, fieldIndex)
-								|| (datatype.isConfigFieldBranch(keyConfig, fieldIndex) && h == fieldIndex)))){
+						if(!datatype.isConfigFieldBranch(cluster_instance, keyConfig, h) || (fieldBranchCounts == 0
+							&& (!datatype.isConfigFieldBranch(cluster_instance, keyConfig, fieldIndex)
+								|| (datatype.isConfigFieldBranch(cluster_instance, keyConfig, fieldIndex) && h == fieldIndex)))){
 								keyIndex++;
-							if(datatype.isConfigFieldBranch(keyConfig, h)){
+							if(datatype.isConfigFieldBranch(cluster_instance, keyConfig, h)){
 								fieldBranchCounts++;
 							}
 						}
@@ -361,12 +363,12 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 
 
 // ranges are inclusive
-getKeyRangeMaxByProp = function(key, index, score, prop){
+getKeyRangeMaxByProp = function(cluster_instance, key, index, score, prop){
 	var maxScore = null;
 	var max = (index || {}).max;
 	var keyConfig = datatype.getKeyConfig(key);
-	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
+	var propIndex = datatype.getConfigPropFieldIdxValue(cluster_instance, keyConfig, 'fields', prop);
+	var propFactor = datatype.getConfigPropFieldIdxValue(cluster_instance, keyConfig, 'factors', propIndex);
 	if(score == null){
 		maxScore = '+inf';
 	}else if(prop == null || propFactor == null){
@@ -374,18 +376,18 @@ getKeyRangeMaxByProp = function(key, index, score, prop){
 	}else if(max == null){
 		maxScore = (score - (score % propFactor) + propFactor - 1);		// -1 since ranges are inclusive
 	}else{
-		var preFactor = datatype.getConfigFieldPrefactor(keyConfig, propIndex);
+		var preFactor = datatype.getConfigFieldPrefactor(cluster_instance, keyConfig, propIndex);
 		var addend = (1+max) * propFactor;
 		maxScore = score - (score % (preFactor || Infinity)) + addend - 1;	// -1 since ranges are inclusive
 	}
 	return maxScore;
 };
 
-getKeyRangeMinByProp = function(key, index, score, prop){
+getKeyRangeMinByProp = function(cluster_instance, key, index, score, prop){
 	var min = (index || {}).min;
 	var keyConfig = datatype.getKeyConfig(key);
-	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
+	var propIndex = datatype.getConfigPropFieldIdxValue(cluster_instance, keyConfig, 'fields', prop);
+	var propFactor = datatype.getConfigPropFieldIdxValue(cluster_instance, keyConfig, 'factors', propIndex);
 	if(score == null){
 		minScore = '-inf';
 	}else if(prop == null || propFactor == null){
@@ -393,51 +395,51 @@ getKeyRangeMinByProp = function(key, index, score, prop){
 	}else if(min == null){
 		minScore = score - (score % propFactor);
 	}else{
-		var preFactor = datatype.getConfigFieldPrefactor(keyConfig, propIndex);
+		var preFactor = datatype.getConfigFieldPrefactor(cluster_instance, keyConfig, propIndex);
 		var addend = min * propFactor;
 		minScore = score - (score % (preFactor || Infinity)) + addend;
 	}
 	return minScore;
 };
 
-getKeyRangeStartScore = function(range_order, key, index, score){
+getKeyRangeStartScore = function(cluster_instance, range_order, key, index, score){
 	var startScore = null;
 	var startBound = (index[label_exclude_cursor] ? '(' : '');
 	if(range_order == asc){
-		startScore = getKeyRangeMinByProp(key, index, score, (index||{})[label_start_prop]);
+		startScore = getKeyRangeMinByProp(cluster_instance, key, index, score, (index||{})[label_start_prop]);
 	}else if(range_order == desc){
-		startScore = getKeyRangeMaxByProp(key, index, score, (index||{})[label_start_prop]);
+		startScore = getKeyRangeMaxByProp(cluster_instance, key, index, score, (index||{})[label_start_prop]);
 	}
 	return startBound+startScore;
 };
 
-getKeyRangeStopScore = function(range_order, key, index, score){
+getKeyRangeStopScore = function(cluster_instance, range_order, key, index, score){
 	var stopScore = null;
 	if(range_order == asc){
-		stopScore = getKeyRangeMaxByProp(key, index, score, (index||{})[label_stop_prop]);
+		stopScore = getKeyRangeMaxByProp(cluster_instance, key, index, score, (index||{})[label_stop_prop]);
 	}else if(range_order == desc){
-		stopScore = getKeyRangeMinByProp(key, index, score, (index||{})[label_stop_prop]);
+		stopScore = getKeyRangeMinByProp(cluster_instance, key, index, score, (index||{})[label_stop_prop]);
 	}
 	return stopScore;
 };
 
-getKeyRangeStartMember = function(range_order, key, index, member){
+getKeyRangeStartMember = function(cluster_instance, range_order, key, index, member){
 	var startMember = member;
 	var startProp = (index||{})[label_start_prop];
 	var keyConfig = datatype.getKeyConfig(key);
-	var startPropIndex = datatype.getConfigFieldIdx(keyConfig, startProp);
+	var startPropIndex = datatype.getConfigFieldIdx(cluster_instance, keyConfig, startProp);
 	var startBound = (index[label_exclude_cursor] ? '(' : '[');
 	if(member != null){
 		// stripe off from member-parts, all prop-suffixes until the startProp
 		// NB: the algorithm here assumes the index holds all props till the startProp
 		//	else ranging is not possible!
 		var offsets = 0;
-		if(startProp == null || !datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex)){
+		if(startProp == null || !datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, startPropIndex)){
 			startPropIndex = -1;
 			offsets = Infinity;	// don't truncate in case of no startProp/startPropIndex
 		}
 		for(var i=0; i <= startPropIndex; i++){
-			if(datatype.isConfigFieldUIDPrepend(keyConfig, i)){
+			if(datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, i)){
 				offsets++;
 			}
 		}
@@ -453,9 +455,9 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 		// e.g. aa:a:...   vs.  aa:aZ:...
 		// but this should only be done in case the member-tray was truncated
 		// otherwise the resulting string would not be a prefix anymore
-		var offsetPrependsUID = datatype.getConfigIndexProp(keyConfig, 'offsetprependsuid') || [];
+		var offsetPrependsUID = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'offsetprependsuid') || [];
 		var isLastPrepend = (offsetPrependsUID.lastIndexOf(true) == startPropIndex);
-		if(startProp != null && datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex) && !isLastPrepend){
+		if(startProp != null && datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, startPropIndex) && !isLastPrepend){
 			tray.push('');							// character preceding all others
 		}
 		startMember = tray.join(separator_detail);
@@ -468,19 +470,19 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 	return startMember;
 };
 
-getKeyRangeStopMember = function(range_order, key, index, member){
+getKeyRangeStopMember = function(cluster_instance, range_order, key, index, member){
 	var stopMember = null;
 	var stopProp = (index||{})[label_stop_prop];
 	var keyConfig = datatype.getKeyConfig(key);
-	var stopPropIndex = datatype.getConfigFieldIdx(keyConfig, stopProp);
+	var stopPropIndex = datatype.getConfigFieldIdx(cluster_instance, keyConfig, stopProp);
 	if(member != null){
 		var offsets = 0;
-		if(stopProp == null || !datatype.isConfigFieldUIDPrepend(keyConfig, stopPropIndex)){
+		if(stopProp == null || !datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, stopPropIndex)){
 			stopPropIndex = -1;
 			offsets = Infinity;
 		}
 		for(var i=0; i <= stopPropIndex; i++){
-			if(datatype.isConfigFieldUIDPrepend(keyConfig, i)){
+			if(datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, i)){
 				offsets++;
 			}
 		}
@@ -498,9 +500,9 @@ getKeyRangeStopMember = function(range_order, key, index, member){
 			var nextStr = lastStr.slice(0, -1)+String.fromCharCode(lastStr.charCodeAt(lastStr.length-1)+incr);
 			tray[tray.length-1] =  nextStr;
 		}
-		var offsetPrependsUID = datatype.getConfigIndexProp(keyConfig, 'offsetprependsuid') || [];
+		var offsetPrependsUID = datatype.getConfigIndexProp(cluster_instance, keyConfig, 'offsetprependsuid') || [];
 		var isLastPrepend = (offsetPrependsUID.lastIndexOf(true) == stopPropIndex);
-		if(stopProp != null && datatype.isConfigFieldUIDPrepend(keyConfig, stopPropIndex) && !isLastPrepend){
+		if(stopProp != null && datatype.isConfigFieldUIDPrepend(cluster_instance, keyConfig, stopPropIndex) && !isLastPrepend){
 			tray.push('');
 		}
 		stopMember = tray.join(separator_detail);
@@ -519,17 +521,17 @@ getKeyRangeStopMember = function(range_order, key, index, member){
 // In the case of keySuffixes, command.isOverRange must be run across a set of keyChains
 // NB: depending on attribute.limit, execution may be touch only some preceding keys (even for $count command)
 // hence attribute.limit is very much recommended
-getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
+getKeyChain = function(cluster_instance, cmd, keys, key_type, key_field, key_suffixes, limit){
 	if(!((key_suffixes || []).length > 0)){
 		return [];
 	}
 	var key = keys[0];
 	// fetch indexes of key-suffix props
-	var props = datatype.getConfigIndexProp(key_type, 'fields');
+	var props = datatype.getConfigIndexProp(cluster_instance, key_type, 'fields');
 	var suffixPropIndexes = [];
 	for(var i=0; i < props.length; i++){
-		if(datatype.isConfigFieldKeySuffix(key_type, i)){
-			if(!datatype.isConfigFieldBranch(key_type, i)){
+		if(datatype.isConfigFieldKeySuffix(cluster_instance, key_type, i)){
+			if(!datatype.isConfigFieldBranch(cluster_instance, key_type, i)){
 				suffixPropIndexes.push(i);
 			}else if(props[i] == key_field){		// if keyText is the field-branch
 				suffixPropIndexes.unshift(i);
@@ -557,23 +559,11 @@ getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
 	return keyChain;	
 };
 
-// decide here which database instance should be queried
-getQueryDBInstance = function(cmd, keys, field, key_suffixes){
-	var key = keys[0];
-	var keyConfig = datatype.getKeyConfig(key);
-	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
-	return instanceDecisionFunction.apply(this, [cmd, keys, field, key_suffixes]);
-};
-
 // TODO: limit-offset across keyChains is not yet supported
-queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixes, index, args, attribute, then){
+queryDBInstance = function(cluster_instance, cmd, keys, key_type, key_field, key_suffixes, index, args, attribute, then){
 	var ret = {code:1};
 	var key = keys[0];
 	var keyLabels = [datatype.getKeyLabel(key)];
-	var commandType = command.getType(cmd);
-	var keyCommand = command.toRedis(cmd);
-	var suffixes = [];
-	var prefixes = [];
 	var chainedKeySuffixes = [key_suffixes || []];
 	var chainedArgs = [args];
 	var keyFieldArray = (key_field != null ? [key_field] : []);
@@ -582,15 +572,22 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 	var offset = attribute.offset;
 	var nx = attribute.nx;
 	var withscores = attribute.withscores;
-	switch(instance.type){
+	var cmdType = command.getType(cmd);
+	var keyCommand = command.toRedis(cmd);
+	var suffixes = [];
+	var prefixes = [];
+	// even in the event of a keyChain these settings remain the same
+	// since keyChain are located on the same cluster cluster_instance/type
+	switch(cluster_instance.type){
 	default:
+
 		if(limit && !utils.startsWith(command.getType(cmd), 'count')){
 			[].push.apply(suffixes, ['LIMIT', offset || 0, limit]);
 		}
-		if(withscores && !utils.startsWith(commandType, 'rangebylex') && !utils.startsWith(commandType, 'count')){
+		if(withscores && !utils.startsWith(cmdType, 'rangebylex') && !utils.startsWith(cmdType, 'count')){
 			suffixes.unshift('WITHSCORES');
 		}
-		if(nx && utils.startsWith(commandType, 'add')){
+		if(nx && utils.startsWith(cmdType, 'add')){
 			prefixes.unshift('NX');
 		}
 		if(keyCommand == 'eval'){
@@ -607,14 +604,14 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 	function(callback){
 		var myKeySuffixes = chainedKeySuffixes[idx] || [];
 		var myArgs = chainedArgs[idx];
-		switch(instance.type){
+		switch(cluster_instance.type){
 		default:
 			var keyTexts = [];
 			if(keyLabels.length > 0){
 				keyTexts.push((keyLabels.concat(keyFieldArray).concat(myKeySuffixes || [])).join(separator_key));
 			}
 			var queryArgs = keyTexts.concat(prefixes, myArgs, suffixes);
-			instance.val[keyCommand](queryArgs, function(err, output){
+			cluster_instance.val[keyCommand](queryArgs, function(err, output){
 				var errorMessage = 'FATAL: query.queryDB: args: '+keyCommand+'->'+queryArgs;
 				if(!utils.logError(err, errorMessage)){
 					if(!command.isOverRange(cmd)){
@@ -667,7 +664,7 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 				// get next keys in the chain
 				// TODO offset-ing across keyChains is not handled
 				// 	--> simply decrement current offset value with the count of targets in last key
-				var keyChain = getKeyChain(cmd, keys, key_type, key_field, chainedKeySuffixes[chainedKeySuffixes.length-1], limit);
+				var keyChain = getKeyChain(cluster_instance, cmd, keys, key_type, key_field, chainedKeySuffixes[chainedKeySuffixes.length-1], limit);
 				chainedKeySuffixes = [];
 				chainedArgs = [];
 				idx = 0;
@@ -685,14 +682,7 @@ queryDBInstance = function(instance, cmd, keys, key_type, key_field, key_suffixe
 				}
 			}
 		}
-		if(idx < chainedKeySuffixes.length){
-			// recompute instance, since it may have changed with changing keyChains
-			var myKeySuffixes = chainedKeySuffixes[idx] || [];
-			instance = getQueryDBInstance(cmd, keys, key_field, mykeySuffixes);
-			return true;
-		}else{
-			return false;
-		}
+		return (idx < chainedKeySuffixes.length);
 	},
 	function(err){
 		if(!utils.logError(err, 'queryDBInstance')){
@@ -776,7 +766,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 			var rangeOrder = command.getOrder(cmd) || asc;
 			// decide between the different type of ranges
 			if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
-				cmd = cmd[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
+				cmd = cmd.getMode()[datatype.getZRangeSuffix(cluster_instance, keyConfig, index, args, xid, uid)];
 			}
 			// TODO test update function
 			if(utils.startsWith(command.getType(cmd), 'upsert')){
@@ -804,7 +794,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 				if(/*score == null &&*/ uid == null){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
+					var startScore = getKeyRangeStartScore(cluster_instance, rangeOrder, key, index, xid);
 					if(startScore == Infinity || startScore == -Infinity){
 						startScore = null;
 					}
@@ -840,7 +830,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 				// so [member] argument can be tweaked for the desired result
 				var limit = attribute.limit;
 				// NB: if startScore must be used, range [prop] must be provided
-				var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
+				var startScore = getKeyRangeStartScore(cluster_instance, rangeOrder, key, index, xid);
 				if(startScore == Infinity || startScore == -Infinity){
 					startScore = null;
 				}
@@ -886,8 +876,8 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 				if(utils.startsWith(command.getType(cmd), 'countbylex') && uid == null){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startMember = getKeyRangeStartMember(rangeOrder, key, index, uid);
-					var stopMember = getKeyRangeStopMember(rangeOrder, key, index, uid);
+					var startMember = getKeyRangeStartMember(cluster_instance, rangeOrder, key, index, uid);
+					var stopMember = getKeyRangeStopMember(cluster_instance, rangeOrder, key, index, uid);
 					args.unshift(stopMember);
 					args.unshift(startMember);
 				}
@@ -896,8 +886,8 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 				if(utils.startsWith(command.getType(cmd), 'countbyscore') && (xid == null || xid == '')){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
-					var stopScore = getKeyRangeStopScore(rangeOrder, key, index, xid);
+					var startScore = getKeyRangeStartScore(cluster_instance, rangeOrder, key, index, xid);
+					var stopScore = getKeyRangeStopScore(cluster_instance, rangeOrder, key, index, xid);
 					args.unshift(stopScore);
 					args.unshift(startScore);
 				}
@@ -925,23 +915,23 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, args,
 	return {command:cmd, args:args};
 };
 
-getResultSet = function(original_cmd, keys, qData_list, then){
+getResultSet = function(cluster_instance, original_cmd, keys, qData_list, then){
 	var ret = {code:1};
+	var clusterInstanceId = cluster.getInstanceId(cluster_instance);
 	var len = (qData_list || []).length;
 	var instanceKeySet = {};
 	var key = keys[0];
 	var keyLabel = datatype.getKeyLabel(key);
 	var keyConfig = datatype.getKeyConfig(key);
-	var cmd = original_cmd;
 	// PREPROCESS: prepare instanceKeySet for bulk query execution
 	for(var i=0; i < len; i++){
 		var elem = qData_list[i];
 		var index = elem.index || {};
 		// in contrast to args, attributes are placed just after the key before all other args and indexes
 		var attribute = elem.attribute || {};							// limit, offset, nx, etc
-		var storageAttr = parseIndexToStorageAttributes(key, original_cmd, index);
+		var storageAttr = parseIndexToStorageAttributes(cluster_instance, key, original_cmd, index);
 		var saKeys = Object.keys(storageAttr ||{});
-		// process different field-branches
+		// process different field-branches; vertical partitioning
 		for(j=0; j < saKeys.length; j++){
 			// currently no need for input args in most cases; everything goes into [index]
 			// args are required when several bits of info beyond xid and uid is involved
@@ -952,49 +942,51 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 			if(field == label_lua_nil){
 				field = null;
 			}
-			var dbInstance = getQueryDBInstance(original_cmd, keys, field, fsa.keySuffixes);
-			var dbInstanceArgs = getClusterInstanceQueryArgs(dbInstance, original_cmd, keys, index, args, field, fsa);
-			cmd = dbInstanceArgs.command;
+			// TODO refactor getClusterInstanceQueryArgs so it can be called just once across field branches??
+			var dbInstanceArgs = getClusterInstanceQueryArgs(cluster_instance, original_cmd, keys, index, args, field, fsa);
 			// bulk up the different key-storages for bulk-execution
-			var dbInstanceFlag = cluster.getInstanceLabel(dbInstance);
 			var keyText = keyLabel+(field != null ? separator_key+field : '')+(fsa.keySuffixes != null ? separator_key+fsa.keySuffixes : '');
-			if(!instanceKeySet[dbInstanceFlag]){
-				instanceKeySet[dbInstanceFlag] = {_dbinstance: dbInstance, _keytext: {}};
+			if(!instanceKeySet[clusterInstanceId]){
+				instanceKeySet[clusterInstanceId] = {_dbinstance: cluster_instance, _keytext: {}};
 			}
-			if(!instanceKeySet[dbInstanceFlag]._keytext[keyText]){
-				instanceKeySet[dbInstanceFlag]._keytext[keyText] = {};
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].attribute = attribute;
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].field = field;
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].keySuffixes = fsa.keySuffixes;
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].fieldBranchCount = saKeys.length;
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].index = index;
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].args = [];
-				instanceKeySet[dbInstanceFlag]._keytext[keyText].indexes = [];
+			if(!instanceKeySet[clusterInstanceId]._keytext[keyText]){
+				instanceKeySet[clusterInstanceId]._keytext[keyText] = {};
+				instanceKeySet[clusterInstanceId]._keytext[keyText].attribute = attribute;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].field = field;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes = fsa.keySuffixes;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount = saKeys.length;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].cmd = dbInstanceArgs.command;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].index = index;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].args = [];
+				instanceKeySet[clusterInstanceId]._keytext[keyText].indexes = [];
 			}
-			[].push.apply(instanceKeySet[dbInstanceFlag]._keytext[keyText].args, dbInstanceArgs.args);
+			[].push.apply(instanceKeySet[clusterInstanceId]._keytext[keyText].args, dbInstanceArgs.args);
 		}
 	}
 	var resultset = null;
+	var resultType = null;	// 'array', 'object', 'scalar'
 	var fuidIdx = {};
 	var instanceFlags = Object.keys(instanceKeySet);
-	async.each(instanceFlags, function(dbInstanceFlag, callback){
-		var dbInstance = instanceKeySet[dbInstanceFlag]._dbinstance;
-		var ks = Object.keys(instanceKeySet[dbInstanceFlag]._keytext);
+	async.each(instanceFlags, function(clusterInstanceId, callback){
+		var clusterInstance = instanceKeySet[clusterInstanceId]._dbinstance;
+		var ks = Object.keys(instanceKeySet[clusterInstanceId]._keytext);
 		async.each(ks, function(keyText, cb){
-			var newKeys = instanceKeySet[dbInstanceFlag]._keytext[keyText].newKeys;
-			var field = instanceKeySet[dbInstanceFlag]._keytext[keyText].field;
-			var keySuffixes = instanceKeySet[dbInstanceFlag]._keytext[keyText].keySuffixes;
-			var fieldBranchCount = instanceKeySet[dbInstanceFlag]._keytext[keyText].fieldBranchCount;
-			var index = instanceKeySet[dbInstanceFlag]._keytext[keyText].index;
-			var args = instanceKeySet[dbInstanceFlag]._keytext[keyText].args;
-			var attribute = instanceKeySet[dbInstanceFlag]._keytext[keyText].attribute;
-			queryDBInstance(dbInstance, cmd, keys, keyConfig, field, keySuffixes, index, args, attribute, function(err, result){
+			var newKeys = instanceKeySet[clusterInstanceId]._keytext[keyText].newKeys;
+			var field = instanceKeySet[clusterInstanceId]._keytext[keyText].field;
+			var keySuffixes = instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes;
+			var fieldBranchCount = instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount;
+			var cmd = instanceKeySet[clusterInstanceId]._keytext[keyText].cmd;
+			var index = instanceKeySet[clusterInstanceId]._keytext[keyText].index;
+			var args = instanceKeySet[clusterInstanceId]._keytext[keyText].args;
+			var attribute = instanceKeySet[clusterInstanceId]._keytext[keyText].attribute;
+			queryDBInstance(clusterInstance, cmd, keys, keyConfig, field, keySuffixes, index, args, attribute, function(err, result){
 				// POST-PROCESS
 				if(!utils.logCodeError(err, result)){
 					var withscores = (attribute || {}).withscores;
 					if(Array.isArray(result.data)){
-						var isRangeCommand = command.isOverRange(command);
-						resultset = resultset || {};	// dict is used to maitain positioning when elements are deleted
+						resultType = 'array';
+						var isRangeCommand = command.isOverRange(cmd);
+						resultset = resultset || {};	// dict is used to maintain positioning when elements are deleted
 						for(var i=0; i < result.data.length; i++){
 							var detail = null;
 							var uid = null;
@@ -1019,7 +1011,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 							//if(!withscores){
 							//	detail = {uid: detail.uid};
 							//}
-							detail = parseStorageAttributesToIndex(key, keyText, xid, uid);
+							detail = parseStorageAttributesToIndex(cluster_instance, key, keyText, xid, uid);
 							// querying field-branches can result in separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var fuid = detail.fuid;
@@ -1062,7 +1054,8 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 						var xid = result.data;
 						var uid = args[0];
 						if(utils.startsWith(command.getType(cmd), 'get')){
-							var detail = parseStorageAttributesToIndex(key, keyText, xid, uid);
+							resultType = 'object';
+							var detail = parseStorageAttributesToIndex(cluster_instance, key, keyText, xid, uid);
 							// querying field-branches can result is separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var field = detail.field;
@@ -1083,6 +1076,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 								resultset = detail.index;
 							}
 						}else{
+							resultType = 'scalar';
 							if(utils.isInt(xid)){
 								// NB: when zcount/etc is used on field-branches, the average count is returned!!
 								var count = parseInt(xid, 10);
@@ -1101,7 +1095,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 			callback(err);
 		});
 	}, function(err){
-		if(Array.isArray(resultset)){
+		if(resultType == 'array'){
 			var sortedKeys = Object.keys(resultset || {}).sort(function(a,b){return parseInt(a,10) > parseInt(b, 10);});
 			ret.data = [];
 			for(var i=0; i < sortedKeys.length; i++){
@@ -1131,8 +1125,8 @@ getComparatorProp = function(comparator, prop){
 	return ((comparator || {})[prop] || {})[label_comparator_prop] || prop;
 }
 //var comparator = {keytext:[], score:[], uid:[]};
-getComparison = function(order, comparator, index, ref, index_data, ref_data){
-	order = order || database.asc;
+getComparison = function(cluster_instance, order, comparator, index, ref, index_data, ref_data){
+	order = order || datatype.getAscendingOrderLabel();
 	// NB: sometimes <keys> prop is not available, but if there's a single prop <keys> is not required
 	var indexKeyType = index_data.keytype;
 	var refKeyType = ref_data.keytype;
@@ -1144,11 +1138,13 @@ getComparison = function(order, comparator, index, ref, index_data, ref_data){
 		// indexes may have different translations of comparator props
 		var indexProp = getComparatorProp(indexComparator, prop);
 		var refProp = getComparatorProp(refComparator, prop);
-		var indexPropIndex = datatype.getConfigFieldIdx(indexKeyType, indexProp);
-		var refPropIndex = datatype.getConfigFieldIdx(refKeyType, refProp);
+		var indexPropIndex = datatype.getConfigFieldIdx(cluster_instance, indexKeyType, indexProp);
+		var refPropIndex = datatype.getConfigFieldIdx(cluster_instance, refKeyType, refProp);
 		// NB: key suffixes are checked as integers, not strings
-		var indexVal = (index[indexProp] == null ? -Infinity : parseInt(datatype.splitConfigFieldValue(indexKeyType, indexProp, index[indexProp])[0], 10));
-		var refVal = (ref[refProp] == null ? -Infinity : parseInt(datatype.splitConfigFieldValue(refKeyType, refProp, ref[refProp])[0], 10));
+		var indexVal = (index[indexProp] == null ? -Infinity 
+					: parseInt(datatype.splitConfigFieldValue(cluster_instance, indexKeyType, indexProp, index[indexProp])[0], 10));
+		var refVal = (ref[refProp] == null ? -Infinity 
+					: parseInt(datatype.splitConfigFieldValue(cluster_instance, refKeyType, refProp, ref[refProp])[0], 10));
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 		}else if(indexVal > refVal){
@@ -1164,12 +1160,12 @@ getComparison = function(order, comparator, index, ref, index_data, ref_data){
 		// indexes may have different translations of comparator props
 		var indexProp = getComparatorProp(indexComparator, prop);
 		var refProp = getComparatorProp(refComparator, prop);
-		var indexPropIndex = datatype.getConfigFieldIdx(indexKeyType, indexProp);
-		var refPropIndex = datatype.getConfigFieldIdx(refKeyType, refProp);
-		var indexPropFactor = datatype.getConfigPropFieldIdxValue(indexKeyType, 'factors', indexPropIndex);
-		var refPropFactor = datatype.getConfigPropFieldIdxValue(refKeyType, 'factors', refPropIndex);
-		var indexVal = (indexPropFactor || 0) * (datatype.splitConfigFieldValue(indexKeyType, indexProp, index[indexProp])[1] || 0);
-		var refVal = (refPropFactor || 0) * (datatype.splitConfigFieldValue(refKeyType, refProp, ref[refProp])[1] || 0);
+		var indexPropIndex = datatype.getConfigFieldIdx(cluster_instance, indexKeyType, indexProp);
+		var refPropIndex = datatype.getConfigFieldIdx(cluster_instance, refKeyType, refProp);
+		var indexPropFactor = datatype.getConfigPropFieldIdxValue(cluster_instance, indexKeyType, 'factors', indexPropIndex);
+		var refPropFactor = datatype.getConfigPropFieldIdxValue(cluster_instance, refKeyType, 'factors', refPropIndex);
+		var indexVal = (indexPropFactor || 0) * (datatype.splitConfigFieldValue(cluster_instance, indexKeyType, indexProp, index[indexProp])[1] || 0);
+		var refVal = (refPropFactor || 0) * (datatype.splitConfigFieldValue(cluster_instance, refKeyType, refProp, ref[refProp])[1] || 0);
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 		}else if(indexVal > refVal){
@@ -1185,11 +1181,11 @@ getComparison = function(order, comparator, index, ref, index_data, ref_data){
 		// indexes may have different translations of comparator props
 		var indexProp = getComparatorProp(indexComparator, prop);
 		var refProp = getComparatorProp(refComparator, prop);
-		var indexPropIndex = datatype.getConfigFieldIdx(indexKeyType, indexProp);
-		var refPropIndex = datatype.getConfigFieldIdx(refKeyType, refProp);
+		var indexPropIndex = datatype.getConfigFieldIdx(cluster_instance, indexKeyType, indexProp);
+		var refPropIndex = datatype.getConfigFieldIdx(cluster_instance, refKeyType, refProp);
 		// like in redis, uid is ordered as a string
-		var indexVal = ''+ (datatype.splitConfigFieldValue(indexKeyType, indexProp, index[indexProp])[1] || '');
-		var refVal = ''+ (datatype.splitConfigFieldValue(refKeyType, refProp, ref[refProp])[1] || '');
+		var indexVal = ''+ (datatype.splitConfigFieldValue(cluster_instance, indexKeyType, indexProp, index[indexProp])[1] || '');
+		var refVal = ''+ (datatype.splitConfigFieldValue(cluster_instance, refKeyType, refProp, ref[refProp])[1] || '');
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 		}else if(indexVal > refVal){
@@ -1203,14 +1199,22 @@ getComparison = function(order, comparator, index, ref, index_data, ref_data){
 	return matchSymbol;
 }
 
+// decide here which cluster_instance should be queried
+getQueryDBInstance = function(cmd, keys){
+	var key = keys[0];
+	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
+	return instanceDecisionFunction.apply(this, [cmd, keys]);
+};
+
 query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 	// querying fields with partitions is tricky
 	// execute the different partitions separately and merge the results
 	// NB: partitions allow use of e.g. flags without breaking ordering
 	var key = keys[0];
+	var clusterInstance = getQueryDBInstance(cmd, keys);
 	var keyConfig = datatype.getKeyConfig(key);
 	var cmdType = command.getType(cmd);
-	var partitions = datatype.getConfigIndexProp(keyConfig, 'partitions') || [];
+	var partitions = datatype.getConfigIndexProp(clusterInstance, keyConfig, 'partitions') || [];
 	var partitionCrossJoins = [];
 	var indexClone = null;						// prevent mutating <index>
 	var comparator = null;
@@ -1218,7 +1222,7 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 	if(utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count')){
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
-		var comparator = datatype.getConfigFieldOrdering(keyConfig);
+		var comparator = datatype.getConfigFieldOrdering(clusterInstance, keyConfig);
 		var startProp = index[label_start_prop];
 		var stopProp = index[label_stop_prop];
 		var startPropScoreIdx = comparator.score.indexOf(startProp);
@@ -1226,7 +1230,7 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 		var stopPropScoreIdx = comparator.score.indexOf(stopProp);
 		var stopPropUIDidx = comparator.uid.indexOf(stopProp);
 		for(var prop in index){								// NB: some of these props are stray/unknown
-			var propIndex = datatype.getConfigFieldIdx(keyConfig, prop);
+			var propIndex = datatype.getConfigFieldIdx(clusterInstance, keyConfig, prop);
 			var propValue = index[prop];
 			indexClone[prop] = propValue;						// log <index> props i.e. shallow copy
 			if(Array.isArray(propValue)){
@@ -1274,10 +1278,10 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 	}
 	var singleIndexList = [{index:(indexClone || index), args:args, attribute:attribute}];
 	if(partitionCrossJoins.length == 0){
-		return getResultSet(cmd, keys, singleIndexList, then);
+		return getResultSet(clusterInstance, cmd, keys, singleIndexList, then);
 	}else{
 		// merge query results in retrieval order
-		comparator = comparator || datatype.getConfigFieldOrdering(keyConfig);
+		comparator = comparator || datatype.getConfigFieldOrdering(clusterInstance, keyConfig);
 		var partitionResults = [];
 		var partitionIdx = [];
 		var boundIndex = null;
@@ -1293,7 +1297,7 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 				indexClone[prop] = pcj[prop];
 			}
 			singleIndexList[0].index = boundIndex || indexClone;		// bootstrap with indexClone
-			getResultSet(cmd, keys, singleIndexList, function(err, result){
+			getResultSet(clusterInstance, cmd, keys, singleIndexList, function(err, result){
 				partitionResults[idx] = (result || []).data;
 				callback(err);
 			});
@@ -1320,7 +1324,8 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 						}
 						var index = partitionResults[i][idx];
 						var indexData = {keytype: keyConfig};			// no need for comparators here
-						var reln = getComparison(command.getOrder(cmd), comparator, index, boundIndex||{}, indexData, indexData);
+						var reln = getComparison(clusterInstance, command.getOrder(cmd), comparator
+										, index, boundIndex||{}, indexData, indexData);
 						if(boundIndex == null || reln == '<'){
 							boundPartition = i;
 							boundIndex = index;
@@ -1349,7 +1354,8 @@ query.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
 //	the question is whether this can end up in the same queryKeySet, and what happens then??
 //	this interface should not be allowed for calls which don't take multiple indexes
 query.indexListQuery = function(cmd, keys, index_list, then){
-	getResultSet(cmd, keys, index_list, then);
+	var clusterInstance = getQueryDBInstance(cmd, keys);
+	getResultSet(clusterInstance, cmd, keys, index_list, then);
 }
 
 
