@@ -66,15 +66,22 @@ redislayer.datatype = {
 /**
  *
  */
-redislayer.singleIndexQuery = function(cmd, keys, index, args, attribute, then){
-	query.singleIndexQuery(cmd, keys, index, args, attribute, then);
+redislayer.singleIndexQuery = function(arg, then){
+        var cmd = arg.cmd
+        	, key = arg.key
+        	, index = arg.index
+        	, attribute = arg.attribute;
+	query.singleIndexQuery(cmd, key, index, attribute, then);
 };
 
 /**
  *
  */
-redislayer.indexListQuery = function(cmd, keys, index_list, then){
-	query.indexListQuery(cmd, keys, index_list, then);
+redislayer.indexListQuery = function(arg, then){
+        var cmd = arg.cmd
+        	, key = arg.key
+        	, indexList = arg.indexlist;
+	query.indexListQuery(cmd, key, indexList, then);
 };
 
 // JOIN
@@ -83,8 +90,14 @@ redislayer.indexListQuery = function(cmd, keys, index_list, then){
  *
  */
 // TODO change function signature
-redislayer.mergeRanges = function(command_mode, ranges, comparator, join_type, limit, then){
-	join.mergeRanges(command_mode, ranges, comparator, join_type, limit, then);
+redislayer.mergeRanges = function(arg, then){
+	var rangeMode = arg.rangemode
+		, rangeOrder = arg.rangeorder
+		, ranges = arg.ranges
+		, comparator = arg.comparator
+		, joinType = arg.jointype
+		, limit = arg.limit;
+	join.mergeRanges(rangeMode, rangeOrder, ranges, comparator, joinType, limit, then);
 };
 
 // MIGRATE
@@ -92,8 +105,14 @@ redislayer.mergeRanges = function(command_mode, ranges, comparator, join_type, l
 /**
  *
  */
-redislayer.migrate = function(key_origin, key_destination, index_start, index_end, batch_size, nap_duration){
-	return migrate(key_origin, key_destination, index_start, index_end, batch_size, nap_duration);
+redislayer.migrate = function(arg){
+	var keyOrigin = arg.keyorigin
+        	, keyDestination = arg.keydestination
+        	, indexStart = arg.indexstart
+        	, indexEnd = arg.indexend
+        	, batchSize = arg.batchsize
+        	, napDuration = arg.napduration;
+	return migrate(keyOrigin, keyDestination, indexStart, indexEnd, batchSize, napDuration);
 };
 
 

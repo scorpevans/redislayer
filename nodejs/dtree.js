@@ -10,11 +10,14 @@ var dtree = {
 	id:	'datatype',
 	defaultgetter:	{ // see configurations in datatype.js for defaults and examples
 			  /**
-			   * provide a function(cmd, keys, keysuffix_index)
-			   * which returns the cluster-instance in which to perform a query
-			   * NB: keysuffix_index is exact like the index but with field values replaced with their keySuffix 
-			   *	these parameters group indexes into equivalent classes of their keyText
-        		   * 	which is necessary to prevent instanceDecisionFunction from making non-contiguous distribution of index
+			   * provide a function(arg)
+			   * 	@arg is a dict with the fields {metacmd:, key:, keysuffixindex:, keyfield:)
+			   * 	@return the cluster-instance on which to perform a query
+			   * NB: metacmd is the generic command e.g. get (before deciding on a cluster specific commands can't be known)
+			   * NB: keysuffixindex is exactly like the index but with field values replaced with their keySuffix 
+			   *	keySuffixes group indexes into equivalent classes of their keyText
+        		   * 	this input is necessary to prevent clusterinstancefunction from making non-contiguous distribution of index
+			   *    as could have been the case with full index (as opposed to suffixes)
 			   */
 			  clusterinstance: null,
 			  /**
@@ -40,7 +43,7 @@ var dtree = {
 			   */
 			  previouschain: null,
 			  /**
-			   * provide a function(suffix1, suffix2)
+			   * provide a function(key, field, suffix1, suffix2)
 			   * which decides precedence of key-chains i.e. ?suffix1 < suffix2?
 			   */
 			  islessthancomparator: null,
@@ -75,16 +78,28 @@ var dtree = {
 				 */
 				, fieldprependskey: [null, null, true, true]
 				/**
-				 * specify which parts of the value of a field should be cut off to suffix keys
+				 * specify which mid-part of the value of a field should be retained
+				 * the remaining is cut off to suffix keys
 				 * the idea is to shorten values to meet storage restrictions e.g. in redis
-				 * 	or for horizontal partitioning, since keys are suffixed with spliced portions
-				 * x % 10 specifies the chars to skip from the right of the value
-				 * and x / 10 specified the chars to retain as value
+				 * 	or for horizontal partitioning, since keysuffixes lead to new keys
+				 * <offset> % 100 specifies the chars to skip from the right of the value i.e. trailing-info
+				 *	trailing-info is info appended to the end of the actual value
+				 * <offset> / 100 specifies the number of chars to retain as value after the skip
 				 * e.g. offset=52 on value='123456789' would suffix the key with '1289'
 				 * 	and use a value of '34567'
+				 * NB: for the sake of merge-joins, trailing-info offset value should be globally consistent for a field
+				 *	even across configs, in order to retain the same storage ordering of values across keys
 				 * NB: offsetted fields are required in all queries since they help define the key to query
 				 */
-				, offsets: [null, 50+idTrailInfoOffset]
+				, offsets: [null, 500+idTrailInfoOffset]
+				/**
+				 * if the design is such that several fields would produce the same keysuffix,
+				 * nominate an index to represent their keysuffix, instead of repeating the same suffix in the key
+				 * 	of course the designated index should be the field-index of one of the participating fields
+				 * with offsetgroups, several fields can be tried to find keysuffixes in cases of NULL values
+				 * 	this is essential for zset.zscore and zset.range, in which case keysuffix comes from either member/score
+				 */
+				, offsetgroups: []
 				/**
 				 * specify whether the offsetted value should contribute towards the <unique field> stored
 				 * this prop composes the unique-id (UID) of a given object
@@ -94,10 +109,10 @@ var dtree = {
 				 */
 				, offsetprependsuid: [false, true, true, true]
 				/**
-				 * mark fields as being partitions, if they should not affect the storage ordering
+				 * mark fields as being partitions, if they should not affect the retrieval ordering
 				 * e.g. in this case, userid's would be ordered despite the preceding gender field
 				 * it is recommended that partition fields have relatively few possible values
-				 * NB: this prop is not used for partitioning; see instead [offsets] or [fieldprependskey] 
+				 * NB: this prop is not used for physical partitioning; see instead [offsets] or [fieldprependskey] 
 				 */
 				, partitions: [true]			// applies only to sorted-sets
 				/**
@@ -108,7 +123,7 @@ var dtree = {
 				, factors: [redisMaxScoreFactor, 1]	// applies only to sorted-sets
 				/**
 				 * specify whether the field is a text or integer field
-				 * this is very useful for SQL storages
+				 * this is very useful for SQL storages, and also for keyChains to determine the type to use for comparisons
 				 */
 				, types: ['integer', 'integer', 'text', 'text']},
 			// each field may have it's own getter except with clusterinstance

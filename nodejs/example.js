@@ -12,13 +12,13 @@ var dtree = {
 		id:	zset,
 		configs: [{
 			id:     'zkey_user',
-			index:  { fields: ['age', 'userid', 'username', 'fullname']
-				, fieldprependskey: [null, null, true, true]		// username & fullname are now so-called field-branches
-				, offsets: [null, 52, 30, 30]
+			index:  { fields: ['gender', 'userid', 'firstname', 'lastname']
+				, fieldprependskey: [null, null, true, true]		// firstname & lastname are now so-called field-branches
+				, offsets: [null, 502, 300, 300]
 				, offsetprependsuid: [false, true, true, true]		// userid=true is crucial; see offsetprependsuid in dtree.js
 				, partitions: [true]
 				, factors: [10000000000000, 1]			
-				, types: ['integer', 'integer', 'text', 'text']},
+				, types: ['text', 'integer', 'text', 'text']},
 			keys:	[{
 				id:	'key1',
 				label:	'example:employee:detail'}]}]}],
@@ -28,42 +28,69 @@ rl.datatype.loadtree(dtree);		// load dtree into redislayer
 
 
 // 2. start querying your data-layer via redislayer; see redislayer.js for API
-// Note that there's no reference to where/how to fetch/save the data
-// this means the storage config can be changed without changing your code
-// and migration is just a function call
+// Note that there's no reference to where/how to fetch/save the data; see dtree.js for configuration
+// 	this means the storage config can be changed without changing your code
+// 	and migration is just a function call
 
 // setters
 var key = rl.datatype.getKey().key1;
 var cmd = key.getCommand().add;
-var index = {age: 12, userid: 12345, username: 'scorpevans', fullname: 'Tom Foo'};
-var args = null;
+var index = {gender: 1, userid: 12300, firstname: 'firstname1', lastname: 'lastname1'};
 var attr = {nx: true};
-rl.singleIndexQuery(cmd, [key], index, args, attr, function(err, result){
+var arg = {cmd:cmd, key:key, index:index, attribute:attr};
+rl.singleIndexQuery(arg, function(err, result){
 	if(err || result.code != 0){
 		console.log('Oops!');
 	}else{
-		console.log('Hurray!');
+		console.log('Hurray! ... '+result.data);
 	}
 });
 
-var idx1 = {age: 13, userid: 23456, username: 'scorpevans2', fullname: 'Dick Bar'};
-var idx2 = {age: 14, userid: 12346, username: 'scorpevans3', fullname: 'Harry Baz'};
-var indexList = [{index:idx1, args:args, attribute:attr}, {index:idx2, args:args, attribute:attr}];
-rl.indexListQuery(cmd, [key], indexList, function(err, result){
+var idx1 = {gender: 0, userid: 23400, firstname: 'firstname2', lastname: 'lastname2'};
+var idx2 = {gender: 1, userid: 12311, firstname: 'firstname3', lastname: 'lastname3'};
+var indexList = [{index:idx1, attribute:attr}, {index:idx2, attribute:attr}];
+var arg = {cmd:cmd, key:key, indexlist:indexList};
+rl.indexListQuery(arg, function(err, result){
 	if(err || result.code != 0){
 		console.log('Oops!');
 	}else{
-		console.log('Hurray!');
+		console.log('Hurray! ... '+result.data);
 	}
 });
 
 // getters
 cmd = key.getCommand().get;
-index = {//age: 12,				// not required since field was not configured for KEYTEXT or UID
-	 //fullname: 'Tom Foo',			// only field-branches which explicitly exist in Object.keys() are searched
-	 userid: 12345,
-	 username: 'scorpevans'};
-rl.singleIndexQuery(cmd, [key], index, null, null, function(err, result){
+index = {gender: 9,			// irrelevant field i.e. not an element of keytext of UID; returned value may differ
+	//lastname: null,		// only field-branches which explicitly exist in Object.keys() are searched/returned
+	 userid: 12300,
+	 firstname: 'firstname1'};
+var arg = {cmd:cmd, key:key, index:index};
+rl.singleIndexQuery(arg, function(err, result){
+	if(err || result.code != 0){
+		console.log('Oops!');
+	}else{
+		console.log(result.data);
+	}
+});
+	// search across field-branches lastname and firstname
+index = { userid: 12300,
+	 lastname: 'lastname1',
+	 firstname: 'firstname1'};
+var arg = {cmd:cmd, key:key, index:index};
+rl.singleIndexQuery(arg, function(err, result){
+	if(err || result.code != 0){
+		console.log('Oops!');
+	}else{
+		console.log(result.data);
+	}
+});
+
+	// search across field-branches for non-existent entry
+index = { userid: 12300,
+	 lastname: 'lastname2',
+	 firstname: 'firstname1'};
+var arg = {cmd:cmd, key:key, index:index};
+rl.singleIndexQuery(arg, function(err, result){
 	if(err || result.code != 0){
 		console.log('Oops!');
 	}else{
@@ -84,7 +111,8 @@ cmd = key.getCommand().rangeasc;		// range in ascending order
 // rl.migrate()
 
 //cmd = key.getCommand().mget;
-//rl.indexListQuery(cmd, [key], indexList, function(err, result){
+var arg = {cmd:cmd, key:key, indexlist:indexList};
+//rl.indexListQuery(arg, function(err, result){
 //	if(err || result.code != 0){
 //		console.log('Oops!');
 //	}else{

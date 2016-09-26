@@ -1,5 +1,13 @@
 var utils = {};
 
+utils.shallowCopy = function(myDict){
+	var myClone = {};
+	for(var key in (myDict || {})){
+		myClone[key] = myDict[key];
+	}
+	return myClone;
+};
+
 
 isObjectEmpty = function(obj) {
 	for (var prop in obj){
@@ -14,7 +22,7 @@ isObjectEmpty = function(obj) {
 
 utils.logError = function(err, message){
 	if(err){
-		console.log('%s, %s',message, err);
+		console.error('%s, %s',message, err);
 		return true;
 	} else{
 		return false;

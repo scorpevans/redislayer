@@ -1,6 +1,6 @@
 var redisDB = require('redis');
 
-// NB: the term cluster should be understood as a master and accompanying slaves
+// NB: the term cluster-instance should be understood as a master and accompanying slaves
 // TODO develop cluster theme
 // 	e.g. write goes into master instance, whereas read goes into cluster pool
 var cluster = {};

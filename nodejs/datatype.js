@@ -12,7 +12,7 @@ var	separator_key = ':',								// separator for parts of keys
 	desc = '_label_descending',							// direction of ranging -- typically over sorted-sets
 	access_code = '_do_not_access_fields_with_this',				// used to lock internal-configs or leaf nodes of dicts see utils.wrap
 	label_cluster_instance_getter = '_cluster_instance_function',
-	default_get_cluster_instance = (function(cmd, keys){return cluster.getDefaultInstance();}),
+	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){return cluster.getDefaultInstance();}),
 	// functions relating to configs with key-suffixes
 	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	label_field_min_value_getter = '_field_min_value_getter_function',		// {field1: function1,..}; see default_get_field_min_value
@@ -31,8 +31,16 @@ var	separator_key = ':',								// separator for parts of keys
 				var prev = parseInt(suffix, 10)-1;
 				return (prev >= 0 ? ''+prev : '');
 			}),
-	default_is_chain_less_than = (function(suffix1, suffix2){			// makes comparison between key-chains
-				return parseInt(suffix1 || 0, 10) < parseInt(suffix2 || 0, 10);
+	default_is_chain_less_than = (function(key, field, suffix1, suffix2){			// makes comparison between key-chains
+				var config = key.getConfig();
+				var fieldIdx = config.getConfigFieldIdx(config, field);
+				var type = config.getConfigPropFieldIdxValue(config, 'types', fieldIdx);
+				if(type == 'text'){
+					// compare texts naively; correct textual comparisons depend on semantics of suffixes
+					return suffix1 < suffix2;
+				}else{	// by default assume keysuffixes are integers
+					return parseInt(suffix1 || 0, 10) < parseInt(suffix2 || 0, 10);
+				}
 			});
 
 
@@ -70,8 +78,8 @@ var structure = {
 			set: {			// {} => .set
 				command: [{
 					// TODO [type] property should be an array of tags?? affords non-linear dimensions
-					add: {type:'adds', val:'sadd'},
-					del: {type:'dels', val:'srem'},
+					add: {type:'adds', val:'sadd', multi: true},
+					del: {type:'dels', val:'srem', multi: true},
 					count: {type:'counts', val: 'count',
 						mode: [{
 							bylex: {type: 'countbylexs', val: 'sismember'},
@@ -79,29 +87,29 @@ var structure = {
 				config: [{}]},
 			string: {
 				command: [{
-					add: {type: 'addk', val: 'mset'},
+					add: {type: 'addk', val: 'mset', multi: true},
 					get: {type: 'getk', val: 'get'},
-					mget: {type: 'getmk', val: 'mget'},
-					upsert: {type: 'upsertk', val: 'set'},
-			 		del: {type: 'delk', val: 'del'},
+					mget: {type: 'getmk', val: 'mget', multi: true},
+					upsert: {type: 'upsertk', val: 'eval'},
+			 		del: {type: 'delk', val: 'del', multi: true},
 					incrby: {type: 'incrbyk', val: 'incrby'}}],
 				config: [{}]},
 			hash: {
 				command: [{
-					add: {type: 'addh', val: 'hmset'},
+					add: {type: 'addh', val: 'hmset', multi: true},
 					get: {type: 'geth', val: 'hget'},
-					mget: {type: 'getmh', val: 'hmget'},
-					upsert: {type: 'upserth', val: 'hmset'},
-					del: {type: 'delh', val: 'hdel'},
+					mget: {type: 'getmh', val: 'hmget', multi: true},
+					upsert: {type: 'upserth', val: 'eval'},
+					del: {type: 'delh', val: 'hdel', multi: true},
 					incrby: {type: 'incrbyh', val: 'hincrby'},
 					incrbyfloat: {type: 'incrbyfloath', val: 'hincrbyfloat'}}],
 				config: [{}]},
 			zset: {
 				command: [{
-					add: {type: 'addz', val: 'zadd'},
+					add: {type: 'addz', val: 'zadd', multi: true},
 					get: {type: 'getz', val: 'zscore'},
-					upsert: {type: 'upsertz', val: 'zadd'},
-					del: {type: 'delz', val: 'zrem'},
+					upsert: {type: 'upsertz', val: 'eval'},
+					del: {type: 'delz', val: 'zrem', multi: true},
 					incrby: {type: 'incrbyz', val: 'zincrby'},
 					delrange: {	type: 'delrangez', val: 'delrange',
 							mode: [{
@@ -241,21 +249,26 @@ isReader = function(){
 	return !this.isWriter;
 };
 
+isMulti = function(){
+	return (unwrap(this).multi == true);
+};
 
 // attach methods to structures
-structure[access_code] = {_all: kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter'])};
-structure.datatype.struct[0][access_code] = {_all: kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter'])};
-structure.datatype.struct[0].set.command[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].string.command[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].hash.command[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].set.command[0].count.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].delrange.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].rangeasc.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].rangedesc.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].count.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].rankasc.mode[0][access_code] = ['isWriter', 'isReader'];
-structure.datatype.struct[0].zset.command[0].rankdesc.mode[0][access_code] = ['isWriter', 'isReader'];
+var structMethods = kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter']);
+var commandMethods = ['isMulti', 'isWriter', 'isReader'];
+structure[access_code] = {_all: structMethods};
+structure.datatype.struct[0][access_code] = {_all: structMethods};
+structure.datatype.struct[0].set.command[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].string.command[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].hash.command[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].set.command[0].count.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].delrange.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].rangeasc.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].rangedesc.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].count.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].rankasc.mode[0][access_code] = {_all: commandMethods};
+structure.datatype.struct[0].zset.command[0].rankdesc.mode[0][access_code] = {_all: commandMethods};
 
 // create interface
 datatype = utils.wrap(structure, {api:{}, keyconfig:{}, keywrap:{}}, access_code, null, null, null, null).datatype;
@@ -296,9 +309,8 @@ datatype.getRedisMaxScoreFactor = function(){
 	return redis_max_score_factor;
 };
 
-datatype.getConfigIndexProp = function(cluster_instance, config, prop){
-	var indexProp = (unwrap(config).indexconfig || {})[prop] || [];
-	return (Array.isArray(indexProp) ? indexProp : indexProp[cluster.getInstanceType(cluster_instance)]);
+datatype.getConfigIndexProp = function(config, prop){
+	return ((unwrap(config).indexconfig || {})[prop] || []);
 };
 
 var dataConfig = {};
@@ -315,13 +327,21 @@ datatype.getKey = function(){
 getIndexConfig = function(){
 	return unwrap(this).indexconfig;
 };
+getConfigFieldIdx = function(config, field){
+	return datatype.getConfigFieldIdx(config, field);
+};
+getConfigPropFieldIdxValue = function(config, prop, field_idx){
+	return datatype.getConfigPropFieldIdxValue(config, prop, field_idx);
+};
+
 
 datatype.createConfig = function(id, struct, index_config){
 	var structConfig = struct.getConfig();
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
 	dict[id] = {key:[{}], indexconfig: index_config};
-	dict[access_code] = {_all: kcf.concat(['getIndexConfig', 'getClusterInstanceGetter', 'setClusterInstanceGetter'])};
+	dict[access_code] = {_all: kcf.concat(['getIndexConfig', 'getConfigFieldIdx', 'getConfigPropFieldIdxValue'
+						, 'getClusterInstanceGetter', 'setClusterInstanceGetter'])};
 	var api = utils.wrap(dict, store, access_code, 'config', 'struct', struct, true);
 	dataConfig[id] = api[id];
 	return dataConfig[id];
@@ -346,6 +366,7 @@ datatype.createKey = function(id, label, key_config){
 };
 
 
+// TODO add checkers to e.g. inform user of malformed configurations, etc
 datatype.loadtree = function(dtree){
 	var fldGetter = {'clusterinstance': 'setClusterInstanceGetter',
 			'minvalue': 'setFieldMinValueGetter',
@@ -385,7 +406,7 @@ datatype.loadtree = function(dtree){
 			var cfgObj = datatype.createConfig(cfg.id, strObj, cfg.index);
 			var keys = cfg.keys;
 			var fieldGetter = cfg.fieldgetter || {};
-			var fieldList = datatype.getConfigIndexProp(null, cfgObj, 'fields');
+			var fieldList = datatype.getConfigIndexProp(cfgObj, 'fields');
 			for(var fld in fldGetter){
 				if(fld == 'clusterinstance'){
 					cfgObj[fldGetter[fld]](getter);
@@ -442,54 +463,63 @@ datatype.getKeyFieldNextChain = function(key, field, cmd_order, chain){
 	return fieldNextChainGetter(chain);
 };
 
+datatype.isKeySuffixLessThan = function(key, field, cmd_order, suffix1, suffix2){
+	var fieldChainLessThanComparator = key.getFieldIsLessThanComparator(field);
+	if(cmd_order == desc){
+		return fieldChainLessThanComparator(key, field, suffix2, suffix1);
+	}else{
+		return fieldChainLessThanComparator(key, field, suffix1, suffix2);
+	}
+};
 datatype.isKeyFieldChainWithinBound = function(key, field, cmd_order, chain, bound_chain){
 	var fieldChainLessThanComparator = key.getFieldIsLessThanComparator(field);
 	if(cmd_order == desc){
-		return !fieldChainLessThanComparator(chain, bound_chain);
+		return !fieldChainLessThanComparator(key, field, chain, bound_chain);	// i.e. before or equal to
 	}else{
-		return !fieldChainLessThanComparator(bound_chain, chain);
+		return !fieldChainLessThanComparator(key, field, bound_chain, chain);	// i.e. before or equal to
 	}
 };
 
 
-datatype.getConfigFieldIdx = function(cluster_instance, config, field){
-	var idx = datatype.getConfigIndexProp(cluster_instance, config, 'fields').indexOf(field);
+datatype.getConfigFieldIdx = function(config, field){
+	var idx = datatype.getConfigIndexProp(config, 'fields').indexOf(field);
 	return (idx >= 0 ? idx : null);
 };
 
-datatype.getConfigPropFieldIdxValue = function(cluster_instance, config, prop, field_idx){
-	return datatype.getConfigIndexProp(cluster_instance, config, prop)[field_idx];
+datatype.getConfigPropFieldIdxValue = function(config, prop, field_idx){
+	return datatype.getConfigIndexProp(config, prop)[field_idx];
 };
 
-datatype.getConfigFieldOrdering = function(cluster_instance, config){
-	// TODO NB: ordering across keys should be admissible only if split[0] is an integer e.g. time
-	// else, the semantics of ordering is a bit shrouded
-	//	use the value provided to check isNumber(val)
-	//	NO! instead clarify that the split config is for handling increasing integers/unicode-ordering
-	//	does newly introduced ordering function solve this?
-	var fieldIndexOrder = datatype.getConfigIndexProp(cluster_instance, config, 'fields');
+/*
+ in order to compare stored objects/indexes, especially when making a merge-join, it is essential that the storages are ordered similarly
+ this means that if for one index-storage of A and B, A < B, then for the other A < B must also hold, in order for a merge-join to be valid
+ in order words, the ordering of the values should be retained across keys, regardless of key-suffixing, etc
+	for this, it's sufficient to ensure that the trailing-info offsets are globally consistent for fields
+ now, objects A & B are compared on the basis of their fields, hence the effect of the fields in storage-order must be taken into account
+ datatype.getConfigFieldOrdering returns the ordering effects of the fields on keytext, score & uid; without info on the offset of the field per part
+*/
+datatype.getConfigFieldOrdering = function(config){
+	var fieldIndexOrder = datatype.getConfigIndexProp(config, 'fields');
 	var comparator = {keytext:[], score:[], uid:[]};
-	var keyFactors = datatype.getConfigIndexProp(cluster_instance, config
-				, 'factors').concat([]).sort(function(a,b){return (b||-Infinity)-a;});	// put <nulls> to the end
+	var keyFactors = datatype.getConfigIndexProp(config, 'factors').concat([]).sort(function(a,b){return (b||-Infinity)-a;});// put <nulls> to the end
 	var keyFactorSplices = 0;
-	// iteration is done in fieldIndexOrder since e.g. member- and key- prepends are also done in this order
+	// NB: iteration is done in fieldIndexOrder since e.g. member- and key- prepends are also done in this order
 	for(var i=0; i < fieldIndexOrder.length; i++){
-		if(datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'partitions', i)){
+		if(datatype.getConfigPropFieldIdxValue(config, 'partitions', i)){
 			// partitions are not used for ordering
 			// adjust keyFactors to ignore partitions
 			keyFactors.splice(i-keyFactorSplices, 1);
 			keyFactorSplices++;
 			continue;
-			
 		}
 		var field = fieldIndexOrder[i];
-		var offset = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsets', i);
-		var factor = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'factors', i);
-		var isPrepend = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsetprependsuid', i);
-		if(offset != null && offset != 0){
+		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', i);
+		var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', i);
+		var isPrepend = datatype.getConfigPropFieldIdxValue(config, 'offsetprependsuid', i);
+		if(datatype.isConfigFieldKeySuffix(config, i)){
 			comparator.keytext.push(field);
 		}
-		if(factor != null && factor != 0){
+		if(datatype.isConfigFieldScoreAddend(config, i)){
 			var ord = keyFactors.indexOf(factor);
 			if(ord >= 0){
 				// in case factors coincide (such configs not advised), find next spot
@@ -506,30 +536,34 @@ datatype.getConfigFieldOrdering = function(cluster_instance, config){
 	return comparator;
 };
 
-
-datatype.isConfigFieldKeySuffix = function(cluster_instance, config, field_idx){
-	return !(!datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsets', field_idx));
+datatype.isConfigFieldScoreAddend = function(config, field_idx){
+	return !(!datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx));
 }
-datatype.isConfigFieldBranch = function(cluster_instance, config, field_idx){
-	return datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'fieldprependskey', field_idx) == true;
+datatype.isConfigFieldKeySuffix = function(config, field_idx){
+	// offset=null  =>  retain everything
+	// offset=0	=>  send everything to key
+	return (datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx) != null);
 }
-datatype.isConfigFieldPartitioned = function(cluster_instance, config, field_idx){
-	return datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'partitions', field_idx) == true;
+datatype.isConfigFieldBranch = function(config, field_idx){
+	return datatype.getConfigPropFieldIdxValue(config, 'fieldprependskey', field_idx) == true;
 }
-datatype.isConfigFieldUIDPrepend = function(cluster_instance, config, field_idx){
-	var offsetPrependsUID = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsetprependsuid', field_idx);
+datatype.isConfigFieldPartitioned = function(config, field_idx){
+	return datatype.getConfigPropFieldIdxValue(config, 'partitions', field_idx) == true;
+}
+datatype.isConfigFieldUIDPrepend = function(config, field_idx){
+	var offsetPrependsUID = datatype.getConfigPropFieldIdxValue(config, 'offsetprependsuid', field_idx);
 	return offsetPrependsUID == true;
 }
 // UID datatype.isConfigFieldStrictlyUIDPrepend whereas XID !datatype.isConfigFieldStrictlyUIDPrepend
-datatype.isConfigFieldStrictlyUIDPrepend = function(cluster_instance, config, field_idx){
-	var factor = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'factors', field_idx);
-	var offset = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsets', field_idx);
-	var isPrepend = datatype.isConfigFieldUIDPrepend(cluster_instance, config, field_idx);
+datatype.isConfigFieldStrictlyUIDPrepend = function(config, field_idx){
+	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx);
+	var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx);
+	var isPrepend = datatype.isConfigFieldUIDPrepend(config, field_idx);
 	return isPrepend && offset != 0 && (factor==0 || factor==null);
 }
 
 // decide which hybrid of zrange to use
-datatype.getZRangeSuffix = function(cluster_instance, config, index, args, xid, uid){
+datatype.getZRangeSuffix = function(config, index, args, xid, uid){
 	// NB: byrank applies to all hybrids
 	// it applies when UID and XID are both not given, and args holds the min/max
 	if((xid == null || xid == '') && (uid == null || uid == '')){
@@ -539,15 +573,15 @@ datatype.getZRangeSuffix = function(cluster_instance, config, index, args, xid, 
 			return 'byscore';		// any stable default; full range
 		}
 	}
-	var factors = datatype.getConfigIndexProp(cluster_instance, config, 'factors') || [];
+	var factors = datatype.getConfigIndexProp(config, 'factors') || [];
 	if(factors.filter(function(a){return (a != null)}).length == 0){
 		return 'bylex';
 	}
 	// byscore, if not a single field which datatype.isConfigFieldStrictlyUIDPrepend is provided
 	var exists = false;
 	for(field in index){
-		var fieldIndex = datatype.getConfigFieldIdx(cluster_instance, config, field);
-		if(datatype.isConfigFieldStrictlyUIDPrepend(cluster_instance, config, fieldIndex)){
+		var fieldIndex = datatype.getConfigFieldIdx(config, field);
+		if(datatype.isConfigFieldStrictlyUIDPrepend(config, fieldIndex)){
 			exists = true;
 			break;
 		}
@@ -561,59 +595,87 @@ datatype.getZRangeSuffix = function(cluster_instance, config, index, args, xid, 
 };
 
 splitID = function (id, offset){ 
-	offset = (offset != null ? Math.abs(offset) : offset);	// ignore polarity here
-	if(offset == Infinity || offset == null){		// index property not included in key
-		return [null, id];				// '' to allow empty-string concats
-	}else if(offset <= 0 && offset != null){		// index property is not included into score
+	if(offset == null){				// index property not included in key
+		return [null, id];
+	}else if(offset == 0){				// index property is not included into score
 		return [id, null];
-	}else if(id != null && offset != null){
+	}else if(id != null){
 		id = id.toString();
 		var num = 0 - offset;
 		var a = id.slice(0, num);
 		var b = id.slice(num);
 		return [a,b];
-	}else if(offset != null){
+	}else{
 		// when id=null return ['', null] for the key and score respectively
 		// '' would force concatenation to key
 		return ['', id];
-	}else{
-		return [null, null];
 	}
 };
-datatype.splitConfigFieldValue = function(cluster_instance, config, field, val){
-	// offset=null/0  =>  retain everything
-	// offset=+/-Infinity => send everything to key
-	var fieldIndex = datatype.getConfigFieldIdx(cluster_instance, config, field);
-	var offset = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'offsets', fieldIndex);
-	var trailOffset = (Math.abs(offset || Infinity) == Infinity ? offset || 0 : offset%10);	// how much to join to key
-	var split = splitID(val, trailOffset);
-	var stem = (String(split[0]) == '' ? null : split[0]);					// <null> since '' is not yet for key-suffixing
-	var trailInfo = split[1];
+datatype.splitConfigFieldValue = function(config, index, field){
+	// offset=null  =>  retain everything
+	// offset=0	=>  send everything to key
+	var val = index[field];
+	var fieldIndex = datatype.getConfigFieldIdx(config, field);
+	var split = null;
+	if(!datatype.isConfigFieldKeySuffix(config, fieldIndex)){
+		split = [null, val];
+	}else{
+		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIndex);
+		if(offset != null && offset < 0){
+			offset = Math.abs(offset);
+		}
+		if(val == null){
+			var offsetgroups = datatype.getConfigIndexProp(config, 'offsetgroups');
+			if(offsetgroups[fieldIndex] >= 0){
+				var fields = datatype.getConfigIndexProp(config, 'fields');
+				// get a non-null offsetgroup-field as [val]
+				// also get the corresponding [offset]; offsetgroups may have different offset regions
+				for(var i=0; i < offsetgroups.length; i++){
+					var fldIdx = offsetgroups[i];
+					if(fldIdx == offsetgroups[fieldIndex]){
+						var fld = fields[fldIdx];
+						if(index[fld] != null){
+							val = index[fld];
+							offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fldIdx);
+							break;
+						}
+					}
+				}
+			}
+		}
+		var trailOffset = (offset != null ? offset%100 : -Infinity);	// trailing chars to join to key
+		var split = splitID(val, trailOffset);
+		var stem = (split[0] == '' ? null : split[0]);			// <null> since '' is not yet for key-suffixing
+		var trailInfo = (split[1] != null ? String(split[1]) : null);
+		offset = (offset != null ? Math.floor(offset/100) : offset);	// how much to leave untouched
+		split = splitID(stem, offset);
+		split[0] = (split[0] != null || trailInfo != null ? (split[0]||'') + (trailInfo||'') : null);
+		if(val != index[field]){
+			split[1] = null;				// non-null val was taken from an offsetgroup-field
+		}
+	}
 	// check if field should be added to LHS
 	var fieldPrefix = [];
-	if(datatype.isConfigFieldBranch(cluster_instance, config, fieldIndex)){
-		offset = (offset != null ? 0 - offset : offset);
-		fieldPrefix = [field];
+	if(datatype.isConfigFieldBranch(config, fieldIndex)){
+		fieldPrefix.push(field);
 	}
-	offset = ((Math.abs(offset) == Infinity ? 0 : Math.floor(offset)/10 || Infinity));	// how much to leave untouched
-	split = splitID(stem, offset);
-	split[0] = (split[0] != null || trailInfo != null ? (split[0]||'') + (trailInfo||'') : null);
 	[].push.apply(split, fieldPrefix);
 	return split;
 };
 
 datatype.unsplitFieldValue = function(split, offset){
-	var trailOffset = (Math.abs(offset || Infinity) == Infinity ? offset || 0 : offset%10);
+	var offset = Math.abs(offset);
+	var trailOffset = (offset == null || offset == Infinity ? offset : offset%100);
 	var innerSplit = splitID(split[0], trailOffset);
 	var stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
 	var trailInfo = (innerSplit[1] != null ? innerSplit[1] : '');
 	return (stemSplit+(split[1] != null ? split[1] : '')+trailInfo);
 };
 
-datatype.getFactorizedConfigFieldValue = function(cluster_instance, config, field, value){
-	var fieldIndex = datatype.getConfigFieldIdx(cluster_instance, config, field);
-	var factor = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'factors', fieldIndex);
-	var isStrictlyValueField = datatype.isConfigFieldStrictlyUIDPrepend(cluster_instance, config, fieldIndex);
+datatype.getFactorizedConfigFieldValue = function(config, field, value){
+	var fieldIndex = datatype.getConfigFieldIdx(config, field);
+	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', fieldIndex);
+	var isStrictlyValueField = datatype.isConfigFieldStrictlyUIDPrepend(config, fieldIndex);
 	if(value != null && factor != null && !isStrictlyValueField){
 		return parseInt(value, 10) * factor;
 	}else{
@@ -621,10 +683,10 @@ datatype.getFactorizedConfigFieldValue = function(cluster_instance, config, fiel
 	}
 };
 
-datatype.getConfigFieldPrefactor = function(cluster_instance, config, field_idx){
+datatype.getConfigFieldPrefactor = function(config, field_idx){
 	var preFactor = null;
 	for(var i=field_idx-1; i >= 0; i--){
-		preFactor = datatype.getConfigPropFieldIdxValue(cluster_instance, config, 'factors', i);
+		preFactor = datatype.getConfigPropFieldIdxValue(config, 'factors', i);
 		if(preFactor){
 			break;
 		}
@@ -654,7 +716,7 @@ command.isOverRange = function(cmd){
 	return (cmdType.slice(-1) == 'z' && (utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count')));
 };
 
-var xidCommandPrefixes = ['add', 'incr', 'upsert', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
+var xidCommandPrefixes = ['add', 'incrby', 'decrby', 'upsert', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
 command.requiresXID = function(cmd){
 	var cmdType = command.getType(cmd);
 	for(var i=0; i < xidCommandPrefixes.length; i++){
@@ -666,7 +728,7 @@ command.requiresXID = function(cmd){
 	return false;
 };
 
-var uidCommandPrefixes = ['add', 'get', 'upsert', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
+var uidCommandPrefixes = ['add', 'incr', 'decr', 'get', 'upsert', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
 command.requiresUID = function(cmd){
 	var cmdType = command.getType(cmd);
 	// string/key struct doesn't take UID
@@ -702,6 +764,19 @@ datatype.getKeyLabel = function(key){
 };
 datatype.getKeyClusterInstanceGetter = function(key){
 	return key.getClusterInstanceGetter();
+};
+datatype.getKeySuffixIndex = function(key, index){
+	var keySuffixIndex = {};
+	var config = key.getConfig();
+	for(fld in index){
+		var ks = datatype.splitConfigFieldValue(config, index, fld)[0];
+		keySuffixIndex[fld] = ks;
+	}
+	return keySuffixIndex;
+};
+
+command.isMulti = function(cmd){
+	return cmd.isMulti();
 };
 
 datatype.command = command;
