@@ -57,8 +57,8 @@ redislayer.datatype = {
 	getCollisionBreaker: datatype.getCollisionBreaker,
 	getIdIncrement: datatype.getIdIncrement,
 	getRedisMaxScoreFactor: datatype.getRedisMaxScoreFactor,
-	getIdTrailInfoOffset: datatype.getIdTrailInfoOffset,
-	setIdTrailInfoOffset: datatype.setIdTrailInfoOffset,
+	getIdPrefixInfoOffset: datatype.getIdPrefixInfoOffset,
+	setIdPrefixInfoOffset: datatype.setIdPrefixInfoOffset,
 };
 
 // QUERY

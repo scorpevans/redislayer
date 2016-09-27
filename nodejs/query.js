@@ -532,8 +532,8 @@ getKeyRangeStopMember = function(range_order, key, index, member){
 getQueryDBInstance = function(cmd, keys, index, key_field){
 	var key = keys[0];
 	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
-	var keySuffixIndex = datatype.getKeySuffixIndex(key, index);
-	var arg = {cmd:cmd, key:keys, keysuffixindex:keySuffixIndex, keyfield:key_field};
+	var keyFieldSuffixIndex = datatype.getKeyFieldSuffixIndex(key, key_field, index);
+	var arg = {cmd:cmd, key:keys, keysuffixindex:keyFieldSuffixIndex, keyfield:key_field};
 	return instanceDecisionFunction.apply(this, [arg]);
 };
 

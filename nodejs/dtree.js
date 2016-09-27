@@ -1,5 +1,5 @@
 var redislayer = require('./redislayer');
-var idTrailInfoOffset = redislayer.datatype.getIdTrailInfoOffset();
+var idInfoOffset = redislayer.datatype.getIdInfoOffset();
 var redisMaxScoreFactor = redislayer.datatype.getRedisMaxScoreFactor();
 var string = redislayer.datatype.getStruct().string.getId();
 var set = redislayer.datatype.getStruct().set.getId();
@@ -78,20 +78,17 @@ var dtree = {
 				 */
 				, fieldprependskey: [null, null, true, true]
 				/**
-				 * specify which mid-part of the value of a field should be retained
+				 * specify which trailing bits  of the value of a field should be retained
 				 * the remaining is cut off to suffix keys
 				 * the idea is to shorten values to meet storage restrictions e.g. in redis
 				 * 	or for horizontal partitioning, since keysuffixes lead to new keys
-				 * <offset> % 100 specifies the chars to skip from the right of the value i.e. trailing-info
-				 *	trailing-info is info appended to the end of the actual value
-				 * <offset> / 100 specifies the number of chars to retain as value after the skip
-				 * e.g. offset=52 on value='123456789' would suffix the key with '1289'
-				 * 	and use a value of '34567'
-				 * NB: for the sake of merge-joins, trailing-info offset value should be globally consistent for a field
-				 *	even across configs, in order to retain the same storage ordering of values across keys
+				 * <offset> % 100 specifies the number of chars remove from the front of the value i.e. prefix-info
+				 * <offset> / 100 specifies the number of trailing chars of the value (outside the prefix-info) to retain
+				 * e.g. offset=42 on value='10004567' would suffix the key with '100045' and retain '67'
+				 * 	whereas offset=49 on value='10004567' would suffix the key with '1000' and retain '4567'
 				 * NB: offsetted fields are required in all queries since they help define the key to query
 				 */
-				, offsets: [null, 500+idTrailInfoOffset]
+				, offsets: [null, 500+idInfoOffset]
 				/**
 				 * if the design is such that several fields would produce the same keysuffix,
 				 * nominate an index to represent their keysuffix, instead of repeating the same suffix in the key

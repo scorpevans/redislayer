@@ -6,7 +6,7 @@ var utils = require('./utils');
 var	separator_key = ':',								// separator for parts of keys
 	separator_detail = '\u0000',							// separator for parts of values i.e. UID and XID
 	collision_breaker = '\u0000?*$#\u0000\u0000?#-*',				// appending this to a UID guarantees it doesn't collide with another
-	offset_id_trail_info = 6,
+	offset_id_prefix_info = 6,
 	redis_max_score_factor = Math.pow(10,15),
 	asc = '_label_ascending',							// direction of ranging -- typically over sorted-sets
 	desc = '_label_descending',							// direction of ranging -- typically over sorted-sets
@@ -281,12 +281,12 @@ datatype.setFieldNextChainGetter(default_get_next_chain);
 datatype.setFieldPreviousChainGetter(default_get_previous_chain);
 datatype.setFieldIsLessThanComparator(default_is_chain_less_than);
 
-datatype.getIdTrailInfoOffset = function(offset){
-	return offset_id_trail_info;
+datatype.getIdPrefixInfoOffset = function(offset){
+	return offset_id_prefix_info;
 };
 
-datatype.setIdTrailInfoOffset = function(offset){
-	offset_id_trail_info = offset;
+datatype.setIdPrefixInfoOffset = function(offset){
+	offset_id_prefix_info = offset;
 };
 
 datatype.getKeySeparator = function(){
@@ -302,7 +302,7 @@ datatype.getCollisionBreaker = function(){
 };
 
 datatype.getIdIncrement = function(){
-	return Math.pow(10, offset_id_trail_info);
+	return Math.pow(10, offset_id_prefix_info);
 };
 
 datatype.getRedisMaxScoreFactor = function(){
@@ -594,10 +594,11 @@ datatype.getZRangeSuffix = function(config, index, args, xid, uid){
 
 };
 
-splitID = function (id, offset){ 
+splitID = function (id, offset){
+	id = (id != null ? String(id) : id); 
 	if(offset == null){				// index property not included in key
 		return [null, id];
-	}else if(offset == 0){				// index property is not included into score
+	}else if(offset == 0){				// full index property is included only in key
 		return [id, null];
 	}else if(id != null){
 		id = id.toString();
@@ -621,9 +622,6 @@ datatype.splitConfigFieldValue = function(config, index, field){
 		split = [null, val];
 	}else{
 		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIndex);
-		if(offset != null && offset < 0){
-			offset = Math.abs(offset);
-		}
 		if(val == null){
 			var offsetgroups = datatype.getConfigIndexProp(config, 'offsetgroups');
 			if(offsetgroups[fieldIndex] >= 0){
@@ -643,13 +641,15 @@ datatype.splitConfigFieldValue = function(config, index, field){
 				}
 			}
 		}
-		var trailOffset = (offset != null ? offset%100 : -Infinity);	// trailing chars to join to key
-		var split = splitID(val, trailOffset);
-		var stem = (split[0] == '' ? null : split[0]);			// <null> since '' is not yet for key-suffixing
-		var trailInfo = (split[1] != null ? String(split[1]) : null);
-		offset = (offset != null ? Math.floor(offset/100) : offset);	// how much to leave untouched
+		var prefixOffset = (offset != null ? -1*(offset%100) : null);				// prefix-info chars to join to key
+		var split = splitID(val, prefixOffset);
+		var prefixInfo = (prefixOffset == null || prefixOffset < 0 ? split[0] : null);
+		var trailInfo = (prefixOffset == null || prefixOffset < 0 ? null : split[1]);
+		var stem = (prefixOffset == null || prefixOffset < 0 ? split[1] : split[0]) || null;	// ||<null> since '' is not yet for key-suffixing
+		offset = (offset != null ? Math.abs(Math.floor(offset/100)) : offset);			// how much of value to retain
 		split = splitID(stem, offset);
-		split[0] = (split[0] != null || trailInfo != null ? (split[0]||'') + (trailInfo||'') : null);
+		split[0] = (split[0] != null || trailInfo != null || prefixInfo != null ?
+				(prefixInfo||'') + (split[0]||'') + (trailInfo||'') : null);
 		if(val != index[field]){
 			split[1] = null;				// non-null val was taken from an offsetgroup-field
 		}
@@ -664,12 +664,16 @@ datatype.splitConfigFieldValue = function(config, index, field){
 };
 
 datatype.unsplitFieldValue = function(split, offset){
-	var offset = Math.abs(offset);
-	var trailOffset = (offset == null || offset == Infinity ? offset : offset%100);
-	var innerSplit = splitID(split[0], trailOffset);
-	var stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
-	var trailInfo = (innerSplit[1] != null ? innerSplit[1] : '');
-	return (stemSplit+(split[1] != null ? split[1] : '')+trailInfo);
+	if(offset > 0){
+		return (split[0]||'')+(split[1]||'');
+	}else{
+		offset = -1 * offset;
+		var trailOffset = (offset == null || offset == Infinity ? offset : offset%100);
+		var innerSplit = splitID(split[0], trailOffset);
+		var stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
+		var trailInfo = (innerSplit[1] != null ? innerSplit[1] : '');
+		return (stemSplit+(split[1] != null ? split[1] : '')+trailInfo);
+	}
 };
 
 datatype.getFactorizedConfigFieldValue = function(config, field, value){
@@ -765,12 +769,24 @@ datatype.getKeyLabel = function(key){
 datatype.getKeyClusterInstanceGetter = function(key){
 	return key.getClusterInstanceGetter();
 };
-datatype.getKeySuffixIndex = function(key, index){
+// TODO: this and other such routines can be switched off iff cluster-instance choices don't need it
+datatype.getKeyFieldSuffixIndex = function(key, field, index){
 	var keySuffixIndex = {};
 	var config = key.getConfig();
-	for(fld in index){
-		var ks = datatype.splitConfigFieldValue(config, index, fld)[0];
-		keySuffixIndex[fld] = ks;
+	var index = index || {};
+	// NB: always essential to used config fields since the index itself may hold extraneous data
+	var indexFields = datatype.getConfigIndexProp(config, 'fields');
+	for(var i=0; i < indexFields.length; i++){
+		var fld = indexFields[i];
+		if(fld in index){
+			var fldIdx = datatype.getConfigFieldIdx(config, fld);
+			// in field-branches, only UID components which are not field branches, and the branched field are applicable
+			if(field == null || fld == field
+				|| (!datatype.isConfigFieldBranch(config, fldIdx) && datatype.isConfigFieldUIDPrepend(config, fldIdx))){
+				var ks = datatype.splitConfigFieldValue(config, index, fld)[0];
+				keySuffixIndex[fld] = ks;
+			}
+		}
 	}
 	return keySuffixIndex;
 };
