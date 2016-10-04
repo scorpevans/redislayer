@@ -1,7 +1,7 @@
 # redislayer  ... under construction
 A redis-inspired query engine for interacting transparently with your heterogeneous data layer
 
-## Motivation - Transparency atop heterogeneity
+## Motivation - transparency atop heterogeneity
 1. storage :- use a standard configuration to define how and where to store/retrieve data objects on heterogeneous databases
 2. query :- use a standard directive to talk to heterogenous databases, and receive a standard result
 3. cluster :- interact with just a single endpoint, instead of separately to tons of databases
