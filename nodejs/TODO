@@ -1,3 +1,5 @@
 * test
 * refactor
+* logging and log-levels
 * include other cluster types
+* consider one-to-many joins, more clauses e.g. grouping, etc

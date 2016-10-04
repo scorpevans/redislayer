@@ -1,5 +1,5 @@
 var rl = require('./redislayer');
-var zset = rl.datatype.getStruct().zset.getId();
+var zset = rl.getStruct().zset.getId();
 
 
 // 1. create and load a tree to represent your keys and configurations
@@ -24,7 +24,7 @@ var dtree = {
 				label:	'example:employee:detail'}]}]}],
 };
 
-rl.datatype.loadtree(dtree);		// load dtree into redislayer
+rl.loadtree({dtree:dtree});		// load dtree into redislayer
 
 
 // 2. start querying your data-layer via redislayer; see redislayer.js for API
@@ -33,7 +33,7 @@ rl.datatype.loadtree(dtree);		// load dtree into redislayer
 // 	and migration is just a function call
 
 // setters
-var key = rl.datatype.getKey().key1;
+var key = rl.getKey().key1;
 var cmd = key.getCommand().add;
 var index = {gender: 1, userid: 12300, firstname: 'firstname1', lastname: 'lastname1'};
 var attr = {nx: true};

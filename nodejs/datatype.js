@@ -13,13 +13,14 @@ var	separator_key = ':',								// separator for parts of keys
 	access_code = '_do_not_access_fields_with_this',				// used to lock internal-configs or leaf nodes of dicts see utils.wrap
 	label_cluster_instance_getter = '_cluster_instance_function',
 	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){return cluster.getDefaultInstance();}),
+	label_comparator = '_comparator',
+	label_comparator_prop = '_comparator_prop',
 	// functions relating to configs with key-suffixes
 	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	label_field_min_value_getter = '_field_min_value_getter_function',		// {field1: function1,..}; see default_get_field_min_value
 	label_field_max_value_getter = '_field_max_value_getter_function',		// {field1: function1,..}; see default_get_field_max_value
 	label_field_next_chain_getter = '_field_next_chain_getter_function',		// {field1: function1,..}; see default_get_next_chain
 	label_field_previous_chain_getter = '_field_previous_chain_getter_function',	// {field1: function1,..}; see default_get_previous_chain
-	label_field_is_less_than_comparator = '_field_is_less_than_comparator',		// {field1: function1,..}; see default_is_chain_less_than
 	// these defaults assume inputs are natural numbers
 	// more optimal implementations should be given, in order to produce only the required keychain
 	default_get_field_min_value = (function(){return 0;}),				// returns current min value of field
@@ -30,18 +31,8 @@ var	separator_key = ':',								// separator for parts of keys
 	default_get_previous_chain = (function(suffix){					// return previous chain after given value
 				var prev = parseInt(suffix, 10)-1;
 				return (prev >= 0 ? ''+prev : '');
-			}),
-	default_is_chain_less_than = (function(key, field, suffix1, suffix2){			// makes comparison between key-chains
-				var config = key.getConfig();
-				var fieldIdx = config.getConfigFieldIdx(config, field);
-				var type = config.getConfigPropFieldIdxValue(config, 'types', fieldIdx);
-				if(type == 'text'){
-					// compare texts naively; correct textual comparisons depend on semantics of suffixes
-					return suffix1 < suffix2;
-				}else{	// by default assume keysuffixes are integers
-					return parseInt(suffix1 || 0, 10) < parseInt(suffix2 || 0, 10);
-				}
 			});
+
 
 
 unwrap = function(caller){
@@ -189,8 +180,8 @@ setKeyLabelFunction = function(caller, label, obj, field){
 };
 
 // functions pertaining to structs/configs/keys with keyChains
-var kcf = ['getFieldMinValueGetter','getFieldMaxValueGetter','getFieldNextChainGetter','getFieldPreviousChainGetter','getFieldIsLessThanComparator'
-	,'setFieldMinValueGetter','setFieldMaxValueGetter','setFieldNextChainGetter','setFieldPreviousChainGetter','setFieldIsLessThanComparator'];
+var kcf = ['getFieldMinValueGetter','getFieldMaxValueGetter','getFieldNextChainGetter','getFieldPreviousChainGetter'
+	,'setFieldMinValueGetter','setFieldMaxValueGetter','setFieldNextChainGetter','setFieldPreviousChainGetter'];
 
 getClusterInstanceGetter = function(){
 	return getKeyLabelFunction(this, label_cluster_instance_getter, null);
@@ -207,9 +198,6 @@ getFieldNextChainGetter = function(field){
 getFieldPreviousChainGetter = function(field){
 	return getKeyLabelFunction(this, label_field_previous_chain_getter, field);
 };
-getFieldIsLessThanComparator = function(field){
-	return getKeyLabelFunction(this, label_field_is_less_than_comparator, field);
-};
 
 setClusterInstanceGetter = function(func){
 	return setKeyLabelFunction(this, label_cluster_instance_getter, func, null);
@@ -225,9 +213,6 @@ setFieldNextChainGetter = function(obj, field){
 };
 setFieldPreviousChainGetter = function(obj, field){
 	return setKeyLabelFunction(this, label_field_previous_chain_getter, obj, field);
-};
-setFieldIsLessThanComparator = function(obj, field){
-	return setKeyLabelFunction(this, label_field_is_less_than_comparator, obj, field);
 };
 
 
@@ -279,7 +264,6 @@ datatype.setFieldMinValueGetter(default_get_field_min_value);
 datatype.setFieldMaxValueGetter(default_get_field_max_value);
 datatype.setFieldNextChainGetter(default_get_next_chain);
 datatype.setFieldPreviousChainGetter(default_get_previous_chain);
-datatype.setFieldIsLessThanComparator(default_is_chain_less_than);
 
 datatype.getIdPrefixInfoOffset = function(offset){
 	return offset_id_prefix_info;
@@ -287,6 +271,15 @@ datatype.getIdPrefixInfoOffset = function(offset){
 
 datatype.setIdPrefixInfoOffset = function(offset){
 	offset_id_prefix_info = offset;
+};
+
+// TODO deprecate the following function
+//      => provide instead functions to readily read the target objects
+datatype.getComparatorLabel = function(){
+	return label_comparator;
+};
+datatype.getComparatorPropLabel = function(){
+	return label_comparator_prop;
 };
 
 datatype.getKeySeparator = function(){
@@ -327,24 +320,31 @@ datatype.getKey = function(){
 getIndexConfig = function(){
 	return unwrap(this).indexconfig;
 };
-getConfigFieldIdx = function(config, field){
-	return datatype.getConfigFieldIdx(config, field);
+getFieldIdx = function(field){
+	return datatype.getConfigFieldIdx(this, field);
 };
-getConfigPropFieldIdxValue = function(config, prop, field_idx){
-	return datatype.getConfigPropFieldIdxValue(config, prop, field_idx);
+getPropFieldIdxValue = function(prop, field_idx){
+	return datatype.getConfigPropFieldIdxValue(this, prop, field_idx);
 };
-
+getFieldOrdering = function(joint_map, joints){
+	return datatype.getConfigFieldOrdering(this, joint_map, joints);
+};
 
 datatype.createConfig = function(id, struct, index_config){
-	var structConfig = struct.getConfig();
+	// allow struct to take nulls, in which case the config is not bound to singleton datatype structure
+	// join.js makes use of such a hack
+	// in order to close the loop to a struct, the respective function can be define manually on the created config
+	var structConfig = (struct != null ? struct.getConfig() : {});
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
 	dict[id] = {key:[{}], indexconfig: index_config};
-	dict[access_code] = {_all: kcf.concat(['getIndexConfig', 'getConfigFieldIdx', 'getConfigPropFieldIdxValue'
-						, 'getClusterInstanceGetter', 'setClusterInstanceGetter'])};
+	dict[access_code] = {_all: kcf.concat(['getIndexConfig', 'getFieldIdx', 'getPropFieldIdxValue'
+						, 'getClusterInstanceGetter', 'setClusterInstanceGetter', 'getFieldOrdering'])};
 	var api = utils.wrap(dict, store, access_code, 'config', 'struct', struct, true);
-	dataConfig[id] = api[id];
-	return dataConfig[id];
+	if(struct){
+		dataConfig[id] = api[id];
+	}
+	return api[id];
 };
 
 getLabel = function(){
@@ -355,14 +355,17 @@ getCommand = function(){	// shortcut
 };
 
 datatype.createKey = function(id, label, key_config){
-	var configKey = key_config.getKey();
+	// allow struct to take nulls, in which case the Key is not bound to singleton datatype structure
+	var configKey = (key_config != null ? key_config.getKey() : {});
 	var store = {api:configKey, keyconfig:{}, keywrap:{}};
 	var dict = {};
 	dict[id] = {label: label};
 	dict[access_code] = {_all: kcf.concat(['getLabel', 'getCommand', 'getClusterInstanceGetter', 'setClusterInstanceGetter'])};
 	api = utils.wrap(dict, store, access_code, 'key', 'config', key_config, true);
-	dataKey[id] = api[id];
-	return dataKey[id];
+	if(key_config){
+		dataKey[id] = api[id];
+	}
+	return api[id];
 };
 
 
@@ -463,20 +466,19 @@ datatype.getKeyFieldNextChain = function(key, field, cmd_order, chain){
 	return fieldNextChainGetter(chain);
 };
 
-datatype.isKeySuffixLessThan = function(key, field, cmd_order, suffix1, suffix2){
-	var fieldChainLessThanComparator = key.getFieldIsLessThanComparator(field);
-	if(cmd_order == desc){
-		return fieldChainLessThanComparator(key, field, suffix2, suffix1);
+datatype.isKeyFieldChainWithinBound = function(config, fieldIdx, cmd_order, chain, bound_chain){
+	var type = datatype.getConfigPropFieldIdxValue(config, 'types', fieldIdx);
+	if(type == 'integer' || type == 'float'){
+		chain = parseFloat(chain);
+		bound_chain = parseFloat(bound_chain);
 	}else{
-		return fieldChainLessThanComparator(key, field, suffix1, suffix2);
+		chain += '';
+		bound_chain += '';
 	}
-};
-datatype.isKeyFieldChainWithinBound = function(key, field, cmd_order, chain, bound_chain){
-	var fieldChainLessThanComparator = key.getFieldIsLessThanComparator(field);
 	if(cmd_order == desc){
-		return !fieldChainLessThanComparator(key, field, chain, bound_chain);	// i.e. before or equal to
+		return (chain >= bound_chain);
 	}else{
-		return !fieldChainLessThanComparator(key, field, bound_chain, chain);	// i.e. before or equal to
+		return (chain <= bound_chain);
 	}
 };
 
@@ -490,51 +492,6 @@ datatype.getConfigPropFieldIdxValue = function(config, prop, field_idx){
 	return datatype.getConfigIndexProp(config, prop)[field_idx];
 };
 
-/*
- in order to compare stored objects/indexes, especially when making a merge-join, it is essential that the storages are ordered similarly
- this means that if for one index-storage of A and B, A < B, then for the other A < B must also hold, in order for a merge-join to be valid
- in order words, the ordering of the values should be retained across keys, regardless of key-suffixing, etc
-	for this, it's sufficient to ensure that the trailing-info offsets are globally consistent for fields
- now, objects A & B are compared on the basis of their fields, hence the effect of the fields in storage-order must be taken into account
- datatype.getConfigFieldOrdering returns the ordering effects of the fields on keytext, score & uid; without info on the offset of the field per part
-*/
-datatype.getConfigFieldOrdering = function(config){
-	var fieldIndexOrder = datatype.getConfigIndexProp(config, 'fields');
-	var comparator = {keytext:[], score:[], uid:[]};
-	var keyFactors = datatype.getConfigIndexProp(config, 'factors').concat([]).sort(function(a,b){return (b||-Infinity)-a;});// put <nulls> to the end
-	var keyFactorSplices = 0;
-	// NB: iteration is done in fieldIndexOrder since e.g. member- and key- prepends are also done in this order
-	for(var i=0; i < fieldIndexOrder.length; i++){
-		if(datatype.getConfigPropFieldIdxValue(config, 'partitions', i)){
-			// partitions are not used for ordering
-			// adjust keyFactors to ignore partitions
-			keyFactors.splice(i-keyFactorSplices, 1);
-			keyFactorSplices++;
-			continue;
-		}
-		var field = fieldIndexOrder[i];
-		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', i);
-		var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', i);
-		var isPrepend = datatype.getConfigPropFieldIdxValue(config, 'offsetprependsuid', i);
-		if(datatype.isConfigFieldKeySuffix(config, i)){
-			comparator.keytext.push(field);
-		}
-		if(datatype.isConfigFieldScoreAddend(config, i)){
-			var ord = keyFactors.indexOf(factor);
-			if(ord >= 0){
-				// in case factors coincide (such configs not advised), find next spot
-				while(comparator.score[ord]){
-					ord++;
-				}
-				comparator.score[ord] = field;
-			}
-		}
-		if(isPrepend){
-			comparator.uid.push(field);
-		}
-	}
-	return comparator;
-};
 
 datatype.isConfigFieldScoreAddend = function(config, field_idx){
 	return !(!datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx));
@@ -544,11 +501,23 @@ datatype.isConfigFieldKeySuffix = function(config, field_idx){
 	// offset=0	=>  send everything to key
 	return (datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx) != null);
 }
+datatype.isConfigFieldStrictlyKeySuffix = function(config, field_idx){
+	return (datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx) == 0);
+}
 datatype.isConfigFieldBranch = function(config, field_idx){
 	return datatype.getConfigPropFieldIdxValue(config, 'fieldprependskey', field_idx) == true;
 }
 datatype.isConfigFieldPartitioned = function(config, field_idx){
 	return datatype.getConfigPropFieldIdxValue(config, 'partitions', field_idx) == true;
+}
+datatype.isConfigPartitioned = function(config){
+	var partitions = datatype.getConfigIndexProp(config, 'partitions') || [];
+	for(var i=0; i < partitions.length; i++){
+		if(datatype.isConfigFieldPartitioned(config, i)){
+			return true;
+		}
+	}
+	return false;
 }
 datatype.isConfigFieldUIDPrepend = function(config, field_idx){
 	var offsetPrependsUID = datatype.getConfigPropFieldIdxValue(config, 'offsetprependsuid', field_idx);
@@ -698,6 +667,273 @@ datatype.getConfigFieldPrefactor = function(config, field_idx){
 	return preFactor;
 };
 
+datatype.getComparatorProp = function(comparator, prop){
+	return ((comparator || {})[prop] || {})[label_comparator_prop] || prop;
+}
+datatype.normalizeOrd = function(ord){
+      	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
+	// this also reduces unnecessary comparisons
+	// merge the edges of the 3 ordParts
+	var score = ord.score;
+	var uid = ord.uid;
+	var keytext = ord.keytext;
+	var firstScoreProp = (score[0] || [])[0];
+	var lastKeytextProp = (keytext[keytext.length-1] || [])[0];
+	// the consecutive occurence of a prop makes it <full>; no offsetting required
+	// the first occurence must be the keysuffix
+	// if lastKeytextProp is null, push firstScoreProp into keytext i.e. normalize
+	//	i.e. there's no suffix, hence firstScoreProp must be complete without offset
+	// if lastKeytextProp == firstScoreProp, again firstScoreProp must be complete without offset
+	if(firstScoreProp != null && (lastKeytextProp == null || firstScoreProp == lastKeytextProp)){
+		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
+		keytext[idx] = [lastKeytextProp || firstScoreProp, null];	// no offset now => complete prop
+		score.splice(0,1);
+		lastKeytextProp = keytext[keytext.length-1][0];			// update
+	}
+	var lastScoreProp = (score[score.length-1] || [])[0];
+	var firstUIDProp = (uid[0] || [])[0];
+	if(firstUIDProp != null && firstUIDProp == lastScoreProp){
+		uid.splice(0, 1);						// i.e. entry is represented in score
+	}else if(firstUIDProp != null && lastScoreProp == null && (lastKeytextProp == null || firstUIDProp == lastKeytextProp)){
+		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
+		keytext[idx] = [lastKeytextProp || firstUIDProp, null];			// no offset now => complete prop
+		uid.splice(0,1);
+	}
+	return ord;
+};
+datatype.jointMap = function(){
+	var jm = {};
+	var myjm = function(key){return (key == access_code ? jm : null);}
+	myjm.addPropMap = function(prop, prop_map){
+		jm[prop] = {};
+		jm[prop][label_comparator_prop] = prop_map;
+	};
+	myjm.view = function(){
+		return JSON.stringify(jm);
+	};
+	return myjm;
+};
+datatype.getJointMapDict = function(joint_map){
+	return (joint_map != null ? unwrap(joint_map) : null);
+};
+/*
+ return an ordering scheme (ord) which tells how the objects stored on a key are ordered
+ the ord should be normalized so seemingly different keys can be seen to have the same comparison
+ in order to improve the match of ords, PrefixInfo should be prefered to trailInfo (see splitConfigFieldValue)
+	because when the prefixInfo is offsetted, the field's normalized ord is still the same as if it wasn't used as a keySuffix
+	this increases the chances of making a merge join (which requires similar ordering) among the keys
+ also, for floats keysuffixes and scores both orders with integer semantics; however uid strings violate this order
+	so once again to improved ordering matches regardless on where values are stored, floats should be padded whenever they are placed in UIDs
+	the float '123.321' should be stored as 'aa123.321'; the 'a' padding per tenth degree reinstates the float ordering
+*/
+// joint_map => {f:{label_comparator_prop: fmap},...}
+datatype.getConfigFieldOrdering = function(config, joint_map, joints){
+	// keytext, score & uid hold props from joints
+	// fieldconfig:{fmap1:{config:#, field:#}, fmap2:{..}, ..}
+	// 	fieldconfig holds fields (which have a mapping to joints) and their respective configs
+	//	these fields could be mangled if they conflict on the left and right side of a merge-join
+	//	hence the need to retain the original field-name under the [field] property
+	var ord = {keytext:[], score:[], uid:[], fieldconfig:{}};
+	// convert encoding to [fieldIdx, cmp_field] pairs
+	var cmpProps = joints;
+	if((cmpProps || []).length > 0){
+		joint_map = datatype.getJointMapDict(joint_map);
+		cmpProps.sort(function(a,b){return datatype.getConfigFieldIdx(config, datatype.getComparatorProp(joint_map, a))
+							- datatype.getConfigFieldIdx(config, datatype.getComparatorProp(joint_map, b))});
+	}else{
+		// NB: iteration is done in field-index order since e.g. uid- and key- prepends are also done in this order
+		cmpProps = datatype.getConfigIndexProp(config, 'fields');
+		joint_map = {};
+	}
+	// we are interested in all fields between the min and max indexes of joints
+	// if a non-comparator field appears between these in ord, joints is not sufficient for ordering
+	var startFldIdx = datatype.getConfigFieldIdx(config, datatype.getComparatorProp(joint_map, cmpProps[0]));
+	var endFldIdx = datatype.getConfigFieldIdx(config, datatype.getComparatorProp(joint_map, cmpProps[cmpProps.length-1]));
+	if(cmpProps.length-1 != endFldIdx - startFldIdx){
+		throw new Error('The comparator props submitted are not sufficient for ordering'
+				+ '; ensure there are no missing props between the given ones!');
+	}
+	var scoreFieldIdx = {};
+	for(var i=0; i < cmpProps.length; i++){
+		var fieldIdx = i+startFldIdx;
+		var prop = cmpProps[i];
+		var field = datatype.getComparatorProp(joint_map, prop);
+		if(datatype.isConfigFieldPartitioned(config, fieldIdx)){
+			// partitions are not used for ordering
+			continue;
+		}
+		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIdx);
+		var cmp = [prop, offset];					// this encoding is useful for datatype.normalizeOrd
+		// fieldconfig
+		ord.fieldconfig[prop] = {config:config, field:field};		// $prop key may be mangled later on by join.mergeRanges
+		// keytext
+	       	if(datatype.isConfigFieldKeySuffix(config, fieldIdx)){
+			if(datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
+				cmp[1] = null;
+			}
+			ord.keytext.push(cmp);
+		}
+		if(!datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
+			// score
+			if(datatype.isConfigFieldScoreAddend(config, fieldIdx)){
+				ord.score.push(cmp);
+				scoreFieldIdx[prop] = fieldIdx;
+			}
+			// uid
+			if(datatype.isConfigFieldUIDPrepend(config, fieldIdx)){
+				ord.uid.push(cmp);
+			}
+		}
+	}
+	// sort ord.score in descending order of the Factors; put nulls as lowest (i.e. not participating)
+	ord.score.sort(function(a,b){return (datatype.getConfigPropFieldIdxValue(config, 'factors', scoreFieldIdx[b]) || -Infinity)
+						- datatype.getConfigPropFieldIdxValue(config, 'factors', scoreFieldIdx[a]);});
+	return datatype.normalizeOrd(ord);
+};
+
+//ord => {keytext:[], score:[], uid:[]};
+datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index_data, ref_data){
+	order = order || datatype.getAscendingOrderLabel();
+	var unmaskField = function(fld){return (unmasked_fields || [])[fld] || fld;};
+	var indexComparator = datatype.getJointMapDict(index_data[label_comparator]) || {};
+	var refComparator = datatype.getJointMapDict(ref_data[label_comparator]) || {} ;
+	// check keytext
+	for(var i=0; i < ord.keytext.length; i++){
+		var prop = ord.keytext[i][0];
+		var offset = ord.keytext[i][1];
+		// indexes may have different translations of ord props
+		var indexOrdProp = datatype.getComparatorProp(indexComparator, prop);
+		var indexProp = unmaskField(indexOrdProp);
+		var indexFieldConfig = ord.fieldconfig[indexOrdProp];
+		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		if(indexFieldConfig == null || !(indexProp in index)){
+			throw new Error('reference to comparison field cannot be found: '+(indexFieldConfig == null ? indexOrdProp : indexProp));
+		}
+		var refOrdProp = datatype.getComparatorProp(refComparator, prop);
+		var refProp = unmaskField(refOrdProp);
+		var refFieldConfig = ord.fieldconfig[refOrdProp];
+		if(refFieldConfig == null || !(refProp in ref)){
+			throw new Error('reference to comparison field cannot be found: '+(refFieldConfig == null ? refOrdProp : refProp));
+		}
+		var indexConfig = indexFieldConfig.config;
+		var refConfig = refFieldConfig.config;
+		var indexField = indexFieldConfig.field;
+		var refField = refFieldConfig.field;
+		var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
+		var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
+		// before using index/ref within functions, translate mangled fields back to config-fields
+		var primitiveIndex = {};
+		primitiveIndex[indexField] = index[indexProp];
+		var primitiveRef = {};
+		primitiveRef[refField] = ref[refProp];
+		// normalization of ord can cause props to be pushed to the keytext
+		// if offset=null in ord, use the full value
+		var indexVal = (offset == null ? index[indexProp] : datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[0]);
+		var refVal = (offset == null ? ref[refProp] : datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0]);
+		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
+		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
+		// if one of the types is int, assume int comparison
+		if(indexFieldType == 'integer' || refFieldType == 'integer'){
+			indexVal = (indexVal != null && indexVal != '' ? parseInt(indexVal, 10) : -Infinity);
+			refVal = (refVal != null && indexVal != '' ? parseInt(refVal, 10) : -Infinity);
+		}else{
+			indexVal = (indexVal != null ? ''+indexVal : '');
+			refVal = (refVal != null ? ''+refVal : '');
+		}
+		if(indexVal < refVal){
+			return (order == asc ? '<' : '>');
+		}else if(indexVal > refVal){
+			return (order == asc ? '>' : '<');
+		}else if(indexVal != refVal){
+			utils.logError('datatype.getComparison, keytext, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			return null;
+		}
+	}
+	// check score
+	for(var i=0; i < ord.score.length; i++){
+		var prop = ord.score[i][0];
+		// indexes may have different translations of ord props
+		var indexOrdProp = datatype.getComparatorProp(indexComparator, prop);
+		var indexProp = unmaskField(indexOrdProp);
+		var indexFieldConfig = ord.fieldconfig[indexOrdProp];
+		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		if(indexFieldConfig == null || !(indexProp in index)){
+			throw new Error('reference to comparison field cannot be found: '+(indexFieldConfig == null ? indexOrdProp : indexProp));
+		}
+		var refOrdProp = datatype.getComparatorProp(refComparator, prop);
+		var refProp = unmaskField(refOrdProp);
+		var refFieldConfig = ord.fieldconfig[refOrdProp];
+		if(refFieldConfig == null || !(refProp in ref)){
+			throw new Error('reference to comparison field cannot be found: '+(refFieldConfig == null ? refOrdProp : refProp));
+		}
+		var indexConfig = indexFieldConfig.config;
+		var refConfig = refFieldConfig.config;
+		var indexField = indexFieldConfig.field;
+		var refField = refFieldConfig.field;
+		var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
+		var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
+		var indexFieldFactor = datatype.getConfigPropFieldIdxValue(indexConfig, 'factors', indexFieldIdx);
+		var refFieldFactor = datatype.getConfigPropFieldIdxValue(refConfig, 'factors', refFieldIdx);
+		// before using index/ref within functions, translate mangled fields back to config-fields
+		var primitiveIndex = {};
+		primitiveIndex[indexField] = index[indexProp];
+		var primitiveRef = {};
+		primitiveRef[refField] = ref[refProp];
+		var indexVal = (indexFieldFactor || 0)
+				* (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || 0);
+		var refVal = (refFieldFactor || 0)
+				* (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || 0);
+		if(indexVal < refVal){
+			return (order == asc ? '<' : '>');
+		}else if(indexVal > refVal){
+			return (order == asc ? '>' : '<');
+		}else if(indexVal != refVal){
+			utils.logError('datatype.getComparison, score, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			return null;
+		}
+	}
+	// check uid
+	for(var i=0; i < ord.uid.length; i++){
+		var prop = ord.uid[i][0];
+		// indexes may have different translations of ord props
+		var indexOrdProp = datatype.getComparatorProp(indexComparator, prop);
+		var indexProp = unmaskField(indexOrdProp);
+		var indexFieldConfig = ord.fieldconfig[indexOrdProp];
+		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		if(indexFieldConfig == null || !(indexProp in index)){
+			throw new Error('reference to comparison field cannot be found: '+(indexFieldConfig == null ? indexOrdProp : indexProp));
+		}
+		var refOrdProp = datatype.getComparatorProp(refComparator, prop);
+		var refProp = unmaskField(refOrdProp);
+		var refFieldConfig = ord.fieldconfig[refOrdProp];
+		if(refFieldConfig == null || !(refProp in ref)){
+			throw new Error('reference to comparison field cannot be found: '+(refFieldConfig == null ? refOrdProp : refProp));
+		}
+		var indexConfig = indexFieldConfig.config;
+		var refConfig = refFieldConfig.config;
+		var indexField = indexFieldConfig.field;
+		var refField = refFieldConfig.field;
+		// before using index/ref within functions, translate mangled fields back to config-fields
+		var primitiveIndex = {};
+		primitiveIndex[indexField] = index[indexProp];
+		var primitiveRef = {};
+		primitiveRef[refField] = ref[refProp];
+		// as in redis, uid is ordered as a string
+		var indexVal = ''+ (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || '');
+		var refVal = ''+ (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || '');
+		if(indexVal < refVal){
+			return (order == asc ? '<' : '>');
+	       	}else if(indexVal > refVal){
+			return (order == asc ? '>' : '<');
+		}else if(indexVal != refVal){
+			utils.logError('datatype.getComparison, score, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			return null;
+		}
+	}
+	var matchSymbol = '=';
+	return matchSymbol;
+};
+
 
 command.getRangeMode = function(cmd){
 	var cmdType = command.getType(cmd);
@@ -751,6 +987,9 @@ command.requiresUID = function(cmd){
 
 // internal routines do not rely on external interfaces; just in case the external ones are deprecated
 // hence redefinitions here!
+datatype.getConfigId = function(config){
+	return config.getId();
+};
 datatype.getKeyConfig = function(key){
 	return key.getConfig();
 };

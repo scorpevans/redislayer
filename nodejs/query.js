@@ -13,8 +13,6 @@ var	const_limit_default = 50,				// result limit for performing internal routine
 	label_function_args = '_function_args',			// when functions are passed the args are held here
 	label_attribute_idxs = '_attribute_idxs',		// when function are passed the attribute index location(s) are held here
 	label_cursor_idxs = '_cursor_idxs',			// when function args are passed, possible cursor location(s) are held here
-	label_comparator = '_comparator',
-	label_comparator_prop = '_comparator_prop',
 	label_start_prop = '_start_prop',
 	label_stop_prop = '_stop_prop',
 	label_exclude_cursor = '_exclude_cursor';
@@ -22,11 +20,8 @@ var	const_limit_default = 50,				// result limit for performing internal routine
 query.getDefaultBatchLimit = function(){
 	return const_limit_default;
 };
-// TODO deprecate the following two functions
+// TODO deprecate the following function
 //	=> provide instead functions to readily read the target objects
-query.getComparatorLabel = function(){
-	return label_comparator;
-};
 query.getExcludeCursorLabel = function(){
 	return label_exclude_cursor;
 };
@@ -61,6 +56,9 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	// for example, note that absent fields may still make an entry in keySuffixes!!
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
+		if(!(field in index)){
+			continue;
+		}
 		var fieldIndex =  i;							// datatype.getConfigFieldIdx(keyConfig, field)
 		var fieldVal = index[field];
 		var splits = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
@@ -546,6 +544,7 @@ getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
 		return [];
 	}
 	var key = keys[0];
+	var config = datatype.getKeyConfig(key);
 	// fetch indexes of key-suffix props
 	var props = datatype.getConfigIndexProp(key_type, 'fields');
 	var suffixPropIndexes = [];
@@ -568,7 +567,7 @@ getKeyChain = function(cmd, keys, key_type, key_field, key_suffixes, limit){
 			var previousKeySuffixes = keyChain[keyChain.length-1] || key_suffixes;
 			var propCurrentChain = previousKeySuffixes[suffixPropIdx];
 			var propNextChain = datatype.getKeyFieldNextChain(key, prop, cmdOrder, propCurrentChain);
-			var isChainWithinBound = datatype.isKeyFieldChainWithinBound(key, prop, cmdOrder, propNextChain, propBoundChain);
+			var isChainWithinBound = datatype.isKeyFieldChainWithinBound(config, propIdx, cmdOrder, propNextChain, propBoundChain);
 			if(isChainWithinBound){
 				var nextKeySuffixes = previousKeySuffixes.concat([]);
 				nextKeySuffixes[suffixPropIdx] = propNextChain;
@@ -826,20 +825,20 @@ console.log(luaArgs);
 						+ 'local score = nil;'
 						+ 'local rank = nil;'
 						+ 'if startScore ~= "'+label_lua_nil+'" then'				// verify unchanged score-member
-						+ '     score = redis.call("zscore", KEYS[1], member);'			// check score tally first
-						+ '     if score == startScore then'					// then rank can be set
-						+ '          rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-						+ '     else'
-						+ '          member = member.."'+collision_breaker+'";'
-						+ '          score = startScore;'
-						+ '          local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-						+ '          rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-						+ '          if count > 0 then'
-						+ '               redis.call("zrem", KEYS[1], member);'
-						+ '          end;'
-						+ '     end;'
+						+ '    score = redis.call("zscore", KEYS[1], member);'			// check score tally first
+						+ '    if score == startScore then'					// then rank can be set
+						+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
+						+ '    else'
+						+ '        member = member.."'+collision_breaker+'";'
+						+ '        score = startScore;'
+						+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
+						+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
+						+ '        if count > 0 then'
+						+ '            redis.call("zrem", KEYS[1], member);'
+						+ '        end;'
+						+ '    end;'
 						+ 'else'
-						+ '     rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'	//no score to seek with
+						+ '    rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'	//no score to seek with
 						+ 'end;'
 						+ 'return rank;'
 					luaArgs.unshift(uid);
@@ -867,20 +866,20 @@ console.log(luaArgs);
 					+ 'local member = ARGV[2];'
 					+ 'local score = nil;'
 					+ 'if startScore ~= "'+label_lua_nil+'" then'						// verify unchanged score-member
-					+ '     score = redis.call("zscore", KEYS[1], member);'					// check score tally first
-					+ '     if score == startScore then'							// then rank can be set
-					+ '          rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
-					+ '     else'
-					+ '          member = member.."'+collision_breaker+'";'
-					+ '          score = startScore;'
-					+ '          local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-					+ '          rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'	// infer the previous position
-					+ '          if count > 0 then'
-					+ '               redis.call("zrem", KEYS[1], member);'
-					+ '          end;'
-					+ '     end;'
+					+ '    score = redis.call("zscore", KEYS[1], member);'					// check score tally first
+					+ '    if score == startScore then'							// then rank can be set
+					+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
+					+ '    else'
+					+ '        member = member.."'+collision_breaker+'";'
+					+ '        score = startScore;'
+					+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
+					+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'	// infer the previous position
+					+ '        if count > 0 then'
+					+ '             redis.call("zrem", KEYS[1], member);'
+					+ '        end;'
+					+ '    end;'
 					+ 'else'
-					+ '     rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
+					+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
 					+ 'end;'
 					+ 'if rank ~= nil then'
 					+ '     rank = rank - '+exclude[command.getOrder(cmd)]+';'
@@ -1004,7 +1003,10 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 					if(Array.isArray(result.data)){
 						resultType = 'array';
 						var isRangeCommand = command.isOverRange(cmd);
-						resultset = resultset || {};	// dict is used to maintain positioning when elements are deleted
+						// although resultset is actually an array i.e. with integer indexes,
+						// dict is used to maintain positioning/indexing when elements are deleted
+						// 	fuidIdx references these positions/indexes
+						resultset = resultset || {};
 						for(var i=0; i < result.data.length; i++){
 							var detail = null;
 							var uid = null;
@@ -1109,6 +1111,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 		});
 	}, function(err){
 		if(resultType == 'array'){
+			// ensure sorting since dicts do not guaranteed keys are returned in sorted order
 			var sortedKeys = Object.keys(resultset || {}).sort(function(a,b){return parseInt(a,10) > parseInt(b, 10);});
 			ret.data = [];
 			for(var i=0; i < sortedKeys.length; i++){
@@ -1126,86 +1129,6 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 		then (err, ret);
 	});
 }
-query.getComparatorProp = function(comparator, prop){
-	return ((comparator || {})[prop] || {})[label_comparator_prop] || prop;
-}
-//var comparator = {keytext:[], score:[], uid:[]};
-query.getComparison = function(order, comparator, index, ref, index_data, ref_data){
-	order = order || datatype.getAscendingOrderLabel();
-	// NB: sometimes <keys> prop is not available, but if there's a single prop <keys> is not required
-					//var indexKeyConfig = (indexKey != null ? datatype.getKeyConfig(indexKey) : null);
-                                        //var boundKeyConfig = (boundKey != null ? datatype.getKeyConfig(boundKey) : null);
-                                        
-	var indexKeyConfig = datatype.getKeyConfig(index_data.key);
-	var refKeyConfig = datatype.getKeyConfig(ref_data.key);
-	var indexComparator = index_data[label_comparator] || {};
-	var refComparator = ref_data[label_comparator] || {};
-	// check keytext
-	for(var i=0; i < comparator.keytext.length; i++){
-		var prop = comparator.keytext[i];
-		// indexes may have different translations of comparator props
-		var indexProp = query.getComparatorProp(indexComparator, prop);
-		var refProp = query.getComparatorProp(refComparator, prop);
-		// NB: key suffixes are checked as integers, not strings
-		var indexVal = datatype.splitConfigFieldValue(indexKeyConfig, index, indexProp)[0];
-		var refVal = datatype.splitConfigFieldValue(refKeyConfig, ref, refProp)[0];
-		// NB: comparability => lessThanComparator of both indexKey and refKey should yield the same result
-		var indexKey = index_data.key;			// more available than bound_data.key
-		if(datatype.isKeySuffixLessThan(indexKey, prop, order, indexVal, refVal)){
-			return '<';
-		}else if(datatype.isKeySuffixLessThan(indexKey, prop, order, refVal, indexVal)){
-			return '>';
-		}else if(indexVal != refVal){
-			utils.logError('WARNING:', 'query.getComparison, keytext, '+comparator+', '+indexVal+', '+refVal);
-			return null;
-		}
-	}
-	// check score
-	for(var i=0; i < comparator.score.length; i++){
-		var prop = comparator.score[i];
-		// indexes may have different translations of comparator props
-		var indexProp = query.getComparatorProp(indexComparator, prop);
-		var refProp = query.getComparatorProp(refComparator, prop);
-		var indexPropIndex = datatype.getConfigFieldIdx(indexKeyConfig, indexProp);
-		var refPropIndex = datatype.getConfigFieldIdx(refKeyConfig, refProp);
-		var indexPropFactor = datatype.getConfigPropFieldIdxValue(indexKeyConfig, 'factors', indexPropIndex);
-		var refPropFactor = datatype.getConfigPropFieldIdxValue(refKeyConfig, 'factors', refPropIndex);
-		var indexVal = (indexPropFactor || 0)
-				* (datatype.splitConfigFieldValue(indexKeyConfig, index, indexProp)[1] || 0);
-		var refVal = (refPropFactor || 0)
-				* (datatype.splitConfigFieldValue(refKeyConfig, ref, refProp)[1] || 0);
-		if(indexVal < refVal){
-			return (order == asc ? '<' : '>');
-		}else if(indexVal > refVal){
-			return (order == asc ? '>' : '<');
-		}else if(indexVal != refVal){
-			utils.logError('WARNING:', 'query.getComparison, score, %s, %s, %s', comparator, indexVal, refVal);
-			return null;
-		}
-	}
-	// check uid
-	for(var i=0; i < comparator.uid.length; i++){
-		var prop = comparator.uid[i];	
-		// indexes may have different translations of comparator props
-		var indexProp = query.getComparatorProp(indexComparator, prop);
-		var refProp = query.getComparatorProp(refComparator, prop);
-		var indexPropIndex = datatype.getConfigFieldIdx(indexKeyConfig, indexProp);
-		var refPropIndex = datatype.getConfigFieldIdx(refKeyConfig, refProp);
-		// as in redis, uid is ordered as a string
-		var indexVal = ''+ (datatype.splitConfigFieldValue(indexKeyConfig, index, indexProp)[1] || '');
-		var refVal = ''+ (datatype.splitConfigFieldValue(refKeyConfig, ref, refProp)[1] || '');
-		if(indexVal < refVal){
-			return (order == asc ? '<' : '>');
-		}else if(indexVal > refVal){
-			return (order == asc ? '>' : '<');
-		}else if(indexVal != refVal){
-			utils.logError('WARNING','query.getComparison, uid, %s, %s, %s', comparator, indexVal, refVal);
-			return null;
-		}
-	}
-	var matchSymbol = '=';
-	return matchSymbol;
-}
 
 query.singleIndexQuery = function(cmd, key, index, attribute, then){
 	var keys = [key];				// TODO deprecate
@@ -1215,21 +1138,20 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 	var clusterInstance = getQueryDBInstance(cmd, keys);
 	var keyConfig = datatype.getKeyConfig(key);
 	var cmdType = command.getType(cmd);
-	var partitions = datatype.getConfigIndexProp(keyConfig, 'partitions') || [];
 	var partitionCrossJoins = [];
 	var indexClone = null;						// prevent mutating <index>
-	var comparator = null;
+	var ord = null;
 	index = index || {};
-	if(utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count')){
+	if(datatype.isConfigPartitioned(keyConfig) && (utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count'))){
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
-		var comparator = datatype.getConfigFieldOrdering(keyConfig);
+		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);
 		var startProp = index[label_start_prop];
 		var stopProp = index[label_stop_prop];
-		var startPropScoreIdx = comparator.score.indexOf(startProp);
-		var startPropUIDIdx = comparator.uid.indexOf(startProp);
-		var stopPropScoreIdx = comparator.score.indexOf(stopProp);
-		var stopPropUIDidx = comparator.uid.indexOf(stopProp);
+		var startPropScoreIdx = ord.score.indexOf(startProp);
+		var startPropUIDIdx = ord.uid.indexOf(startProp);
+		var stopPropScoreIdx = ord.score.indexOf(stopProp);
+		var stopPropUIDidx = ord.uid.indexOf(stopProp);
 		for(var prop in index){								// NB: some of these props are stray/unknown
 			var propIndex = datatype.getConfigFieldIdx(keyConfig, prop);
 			var propValue = index[prop];
@@ -1238,15 +1160,15 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 			if(Array.isArray(propValue)){
 				if((propValue || []).length <= 1){				// sanitize propValue
 					indexClone[prop] = (propValue || [])[0];		// null or singular value
-				}else if(partitions[propIndex] == null){
+				}else if(!datatype.isConfigFieldPartitioned(keyConfig, propIndex)){
 					// without declaration, it's assumed array is indeed raw value
 					// this should also apply to stray/extraneous props
 					continue;
-				}else if(!(comparator.keytext.indexOf(prop) >= 0)		// prop is not essential to resolving the keyText
-					&& (startPropScoreIdx >= 0 && startPropScoreIdx > comparator.score.indexOf(prop))	// out-of-bounds of query
-					&& (startPropUIDIdx >= 0 && startPropUIDIdx > comparator.uid.indexOf(prop))
-					&& (stopPropScoreIdx >= 0 && stopPropScoreIdx > comparator.score.indexOf(prop))
-					&& (stopPropScoreIdx >=0 && stopPropScoreIdx > comparator.uid.indexOf(prop))){
+				}else if(!(ord.keytext.indexOf(prop) >= 0)		// prop is not essential to resolving the keyText
+					&& (startPropScoreIdx >= 0 && startPropScoreIdx > ord.score.indexOf(prop))	// out-of-bounds of query
+					&& (startPropUIDIdx >= 0 && startPropUIDIdx > ord.uid.indexOf(prop))
+					&& (stopPropScoreIdx >= 0 && stopPropScoreIdx > ord.score.indexOf(prop))
+					&& (stopPropScoreIdx >=0 && stopPropScoreIdx > ord.uid.indexOf(prop))){
 					delete indexClone[prop];				// don't use prop
 					continue;
 				}else{ // cross-join the values of the different partitioned props with array values
@@ -1310,7 +1232,7 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 				if(utils.startsWith(cmdType, 'count')){
 					mergeData = partitionResults.reduce(function(a,b){return a+b;});
 				}else{	// compare next values across the partitions and pick the least
-					comparator = comparator || datatype.getConfigFieldOrdering(keyConfig);
+					ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
 					var cmdOrder = command.getOrder(cmd);
 					for(var i=0; true; i++){
 						if( i == pcjIndexes.length){
@@ -1332,12 +1254,14 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 							continue;
 						}
 						var index = partitionResults[i][idx];
-						var indexData = {key: key};			// same fields; no need for comparators here
-						var reln = query.getComparison(cmdOrder, comparator, index, boundIndex||{}, indexData, indexData);
+						var indexData = {};				// same fields; no need for joint_map here
+						var reln = null;
+						if(boundIndex != null){
+							reln = datatype.getComparison(cmdOrder, null, ord, index, boundIndex||{}, indexData, indexData);
+						}
 						if(boundIndex == null || reln == '<'){
 							boundPartition = i;
 							boundIndex = index;
-							alive = true;
 						}else if(reln == '='){
 							// this should NOT happen but in case the values match,
 							// just skip this partition's value

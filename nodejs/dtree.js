@@ -42,11 +42,6 @@ var dtree = {
 			   * which returns the key-chain before given suffix
 			   */
 			  previouschain: null,
-			  /**
-			   * provide a function(key, field, suffix1, suffix2)
-			   * which decides precedence of key-chains i.e. ?suffix1 < suffix2?
-			   */
-			  islessthancomparator: null,
 			},
 	structs:[{
 		id:	zset,
@@ -87,6 +82,8 @@ var dtree = {
 				 * e.g. offset=42 on value='10004567' would suffix the key with '100045' and retain '67'
 				 * 	whereas offset=49 on value='10004567' would suffix the key with '1000' and retain '4567'
 				 * NB: offsetted fields are required in all queries since they help define the key to query
+				 * 	hence it's not advisable to offset fields which change frequently
+				 *	since updating require knowledge of the existing value, then a delete, followed by an insert
 				 */
 				, offsets: [null, 500+idInfoOffset]
 				/**
@@ -103,6 +100,9 @@ var dtree = {
 				 * WARNING: for this specific config, it is crucial that userid=true; see fieldprependskey
 				 *	this index-config is a bad one; better would be if the struct=hash and field-branches don't prepend UID
 				 *	with struct=zset, the XID must be a float so we are forced to stow strings in UID
+				 * NB: uid-prepended fields are required in all queries since they help define the uid to query
+				 * 	hence it's not advisable to uid-prepend fields which change frequently
+				 *	since updating require knowledge of the existing value, then a delete, followed by an insert
 				 */
 				, offsetprependsuid: [false, true, true, true]
 				/**

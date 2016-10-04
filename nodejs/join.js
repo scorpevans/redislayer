@@ -7,25 +7,96 @@ var command = datatype.command;
 
 var join = {};
 	// CONFIGURATIONS
-var	label_functions = '_functions',			 	// passed function(s) are passed here
+var	label_namespace = '_namespace',				// always recommended; in order to prevent field clashes in joins
+	label_functions = '_functions',			 	// passed function(s) are passed here
 	label_function_args = '_function_args',		 	// when functions are passed the args are held here
 	label_attribute_idxs = '_attribute_idxs',	       	// when function are passed the attribute index location(s) are held here
 	label_cursor_idxs = '_cursor_idxs';		     	// when function args are passed, possible cursor location(s) are held here
 
-var defaultLimit = query.getDefaultBatchLimit();
-var comparatorLabel = query.getComparatorLabel();
-var excludeCursorLabel = query.getExcludeCursorLabel();
+var comparatorLabel = datatype.getComparatorLabel();
+var comparatorPropLabel = datatype.getComparatorPropLabel();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
+var defaultLimit = query.getDefaultBatchLimit();
+var excludeCursorLabel = query.getExcludeCursorLabel();
 
-// comparator => {keytext:[...], score:[...], uid:[...]}; see datatype.getKeyConfigPropOrdering
+
+
+
+/*
+               var subscriptionRange = {};
+                subscriptionRange[commons.label_functions] = users.getFolkSubscriptions;
+                // NB: count still has to perform range since count can only be made after the joins
+                // => callers should pass mode=range to the function_args
+                subscriptionRange[commons.label_function_args] = ['range', folk_id, attribute, scroll_type, scroll_position];
+                subscriptionRange[commons.label_attribute_idxs] = 2;
+                subscriptionRange[commons.label_cursor_idxs] = 4;
+                subscriptionRange[commons.label_namespace] = 'subp';
+                subscriptionRange[commons.label_comparator] = {folk: {}};
+                subscriptionRange[commons.label_comparator].folk[commons.label_comparator_prop] = 'subscription';
+ */
+
+
+// adhoc Ords for functions which have to participate in a join but lacking .keys prop in their resultset
+join.createResultsetOrd = function(id, index_config){
+	var config = datatype.createConfig(id, null, index_config);
+	return datatype.getConfigFieldOrdering(config, null, null);
+};
+
+var joinFieldMask = [];
+var unMaskedFields = {};
+mergeOrds = function(ord, rangeIdx, myord, fields, config, namespace, joint_map, joints){
+	var cf = myord.fieldconfig || {};				// save possibly previous fieldconfig for configs
+	myord.fieldconfig = {};						// offload possibly previous fieldconfig
+	var fieldMask = {};
+	var jm = datatype.getJointMapDict(joint_map);
+	for(var i=0; i < fields.length; i++){
+		var fmask = fields[i];
+		var mangledField = fmask;
+		var fld = (cf[fmask] || {field: fmask}).field;		// original-field location in case of existing fieldconfig
+		var existConf = (((ord || {}).fieldconfig || {})[fmask] || {}).config;
+		ord = ord || myord;
+		config = config || cf[fmask].config;
+		if(namespace != null
+			|| (existConf && datatype.getConfigId(existConf) != datatype.getConfigId(config))){
+			mangledField = (namespace != null ? namespace+'.'+fmask : '_'+j+'_'+fmask);
+			// update the global ord
+			ord.fieldconfig[mangledField] = {config:config, field:fld};
+			// also update references to fmask in joint_map
+			// else insert new map to mangledField
+			// TODO WARNING: joint_map is mutated here!!; this mutation is probably informative to the caller??
+			var isFound = false;
+			for(var fm in jm){
+				// NB: expect a single reference; making multiple references doesn't make sense
+				if(jm[fm][comparatorPropLabel] == fmask){
+					jm[fm][comparatorPropLabel] = mangledField;
+					isFound = true;
+					break;
+				}
+			}
+			// NB: this is only relevant for the joints
+			if(!isFound && joints.indexOf(fmask) >= 0){
+				jm[fmask] = {};
+				jm[fmask][comparatorPropLabel] = mangledField;
+			}
+		}else{
+			ord.fieldconfig[fmask] = {config:config, field:fld};
+		}
+		// record per i & prop, the new mangled fieldname; used for output fields
+		fieldMask[fmask] = mangledField;
+		unMaskedFields[mangledField] = fmask;
+	}
+	joinFieldMask[rangeIdx] = fieldMask;
+}
+
+
 // ranges => [{keys:[#], index:{#}, args:[#], attributes:{#}},...]
 // type => fulljoin or innerjoin
 // LIMITATION: this join is ONLY on equality and on unique ranges
 //	complex joins can be handled in the input-functions or on the mergeRange output
 // NB: merge joins assume inputs are sorted in the same order
 // TODO encapsulate first 5 parameters into Range dict
-join.mergeRanges = function(range_mode, range_order, ranges, comparator, join_type, limit, then){
+join.mergeRanges = function(range_mode, range_order, ranges, joints, join_type, limit, then){
 	var rangeProps = [];
 	for(var i=0; i < ranges.length; i++){
 		rangeProps[i] = {};
@@ -42,7 +113,7 @@ join.mergeRanges = function(range_mode, range_order, ranges, comparator, join_ty
 		rangeProps[i].argsCopy.push('/*callback-place-holder*/');
 	}
 	var getRangeIdxComparatorProp = (function(idx, prop){
-		return query.getComparatorProp(ranges[idx][comparatorLabel], prop);
+		return datatype.getComparatorProp(ranges[idx][comparatorLabel], prop);
 	});
 	// NB: count still has to perform range since count can only be made after the joins
 	// => callers should pass mode=range to the function_args
@@ -54,17 +125,21 @@ join.mergeRanges = function(range_mode, range_order, ranges, comparator, join_ty
 	}
 	var rangeIndexes = Object.keys(ranges);
 	var boundIndex = null;
-	var cycleIdx = -1;
+	var boundIndexIdx = -1;
+	var boundIndexMask = {};
 	var innerJoinCount = 0;
 	var refreshIdx = null;						// point where joins are left off to fetch data
+	var ord = null;							// the merges ord of the ranges
 	limit = limit || Infinity;					// NB: not to be confused with limit in <attribute>
 	async.whilst(
 	function(){return (((isRangeCount && joinData < limit) || joinData.length < limit) && rangeIndexes.length > 0);},
 	function(callback){
 		async.each((refreshIdx != null ? [refreshIdx] : rangeIndexes), function(idx, cb){
 			var next = function(err, result){
-				rangeProps[idx].results = (result || []).data || [];
-				rangeProps[idx].keys = (result || {}).keys;
+				result = (result || {});
+				rangeProps[idx].results = result.data || [];
+				rangeProps[idx].key = (result.keys || [])[0];
+				rangeProps[idx].ord = result.ord;
 				cb(err);
 			};
 			var range = ranges[idx];
@@ -87,9 +162,8 @@ true
 				refreshIdx = (refreshIdx != null && refreshIdx >= 0 ? refreshIdx : rangeIndexes.length-1);
 				for(var i=refreshIdx; true; i--){
 					if(i == -1){
-						i = rangeIndexes.length-1;			// reset index
-					}
-					if(i == cycleIdx && cycleIdx != null){			// process previous cycle
+						// reset index and process past cycle
+						i = rangeIndexes.length-1;
 						// check if any joins have been registered
 						// for fulljoin, the boundIndex is returned if it remains the min/max throughout the cycle
 						// for innerjoin, the boundIndex is returned if it makes all others in the cycle
@@ -99,7 +173,7 @@ true
 								// useful to prevent going after info which spreads across keys/servers
 								joinData++;
 							}else{
-								joinData.push(boundIndex);
+								joinData.push(boundIndexMask);
 							}
 							// terminate if enough results are accounted for
 							var accounted = (isRangeCount ? joinData : joinData.length);
@@ -111,12 +185,13 @@ true
 						}
 						// reset registers
 						if(join_type == 'fulljoin'){
-							rangeProps[cycleIdx].resultsIdx = 1 + (rangeProps[cycleIdx].resultsIdx || 0);
+							rangeProps[boundIndexIdx].resultsIdx = 1 + (rangeProps[boundIndexIdx].resultsIdx || 0);
 						}else if(join_type == 'innerjoin'){
 							innerJoinCount = 0;
 						}
 						boundIndex = null;
-						cycleIdx = -1;
+						boundIndexIdx = -1;
+						boundIndexMask = {};
 					}
 					var idx = rangeProps[i].resultsIdx || 0;		// indexes are initially null
 					if(idx >= (rangeProps[i].results || []).length){
@@ -143,9 +218,13 @@ true
 								rangeIndexes.splice(-1);
 								// <splice> other parameters to match the reduction in ranges-size
 								rangeProps.splice(i, 1);
-								cycleIdx = (cycleIdx == i ? -1	// shouldn't happen, right!
-										: (cycleIdx > i ? cycleIdx-1 : cycleIdx));
-								continue;
+								boundIndexIdx = (boundIndexIdx == i ? -1  // shouldn't happen, right!
+								                : (boundIndexIdx > i ? boundIndexIdx-1 : boundIndexIdx));
+								if(rangeProps.length > 0){
+									continue;
+								}else{
+									break;
+								}
 							}
 						}else{						// refresh needed
 							rangeProps[i].results = null;		// initiate refresh
@@ -157,64 +236,86 @@ true
 					var index = rangeProps[i].results[idx];
 					// NB: tricky bit here trying to get the keys from resultset
 					// ensure provided functions return results with keys
-					// sometimes <keys> prop is not available e.g. resultset from join.mergeRanges
-					// 	but if there's a single prop, <keys> is not required
-					var indexKey = (rangeProps[i].keys || [])[0];
-					var boundKey = ((rangeProps[cycleIdx]||{}).keys || [])[0];
-					var indexData = {key: indexKey};
-					indexData[comparatorLabel] = ranges[i][comparatorLabel];
-					var boundData = {key: boundKey};
-					boundData[comparatorLabel] = (ranges[cycleIdx]||{})[comparatorLabel];
-					var reln = (boundIndex == null ? null
-							: query.getComparison(range_order, comparator, index, boundIndex||{}, indexData, boundData));
-					if(boundIndex == null
-						|| join_type == 'innerjoin'						// always progressive
-						|| (join_type == 'fulljoin' && !(reln == '>'))){			// > comes later
-						if(join_type == 'innerjoin' || reln == '='){
-							rangeProps[i].resultsIdx = 1 + (rangeProps[i].resultsIdx || 0);	// always progressive
-							if(join_type == 'innerjoin'){
-								if(boundIndex == null || reln == '>'){
-									cycleIdx = i;
-									boundIndex = index;
-									innerJoinCount = 1;
-								}else if(reln == '='){
-									innerJoinCount++;
-								}
+					// NB: in case of mangling for the config prop of ord, be sure to update the respective joint_map
+					// this is done only once
+					if(ord == null){
+						var ords = [];
+						for(var j=0; j < rangeProps.length; j++){
+							var myord = rangeProps[j].ord;
+							var namespace = ranges[j][label_namespace];
+							if(ranges[j][comparatorLabel] == null){
+								ranges[j][comparatorLabel] = new datatype.jointMap();
 							}
-						}else{	// i.e. fulljoin && reln == '<'
-							cycleIdx = i;
+							var joint_map = ranges[j][comparatorLabel];
+							var fields = Object.keys((myord || {}).fieldconfig || {});
+							var config = null;
+							if(myord == null){
+								var key = rangeProps[j].key;
+								config = datatype.getKeyConfig(key);
+								try{
+									myord = datatype.getConfigFieldOrdering(config, joint_map, joints);
+								}catch(error){
+									return then(error);
+								}
+								myord.fieldconfig = {};			// these are possibly only partial fields
+								fields = datatype.getConfigIndexProp(config, 'fields');
+							}
+							ords.push(myord);
+							// merge ords into a single ord
+							// all ords are equivalent except for the fieldconfig props, which have to be merged
+							// initialize ord to that of the first entry
+							mergeOrds(ord, j, myord, fields, config, namespace, joint_map, joints);
+							if(j == 0){
+								ord = ords[0];
+							}
+						}
+						// TODO check that ords of all ranges are in harmony
+						
+					}
+					var indexData = {};
+					var boundData = {};
+					indexData[comparatorLabel] = ranges[i][comparatorLabel];
+					boundData[comparatorLabel] = (ranges[boundIndexIdx]||{})[comparatorLabel];
+
+					var reln = null;
+					if(boundIndex != null){
+						try{
+							reln = datatype.getComparison(range_order, unMaskedFields, ord, index, boundIndex||{}, indexData, boundData);
+						}catch(error){
+							return then(error);
+						}
+					}
+					if(boundIndex == null
+						|| join_type == 'innerjoin'
+						|| (join_type == 'fulljoin' && !(reln == '>'))){
+						if(boundIndex == null
+							|| (join_type == 'innerjoin' && reln == '>')
+							|| (join_type == 'fulljoin' && reln == '<')){
 							boundIndex = index;
+							boundIndexIdx = i;
+							if(!isRangeCount){
+								boundIndexMask = {};
+							}
+						}
+						if(reln == '=' || join_type == 'innerjoin'){	// always progressive
+							rangeProps[i].resultsIdx = 1 + (rangeProps[i].resultsIdx || 0);	
+						}
+						if(join_type == 'innerjoin'){
+							if(boundIndexIdx == i || reln == '>'){
+								innerJoinCount = 1;
+							}else if(reln == '='){
+								innerJoinCount++;
+							}
 						}
 						// NB: the different range-functions would yield different objects, hence props
 						// hence the merged-results has to be unified somehow
-						// one idea is to push only comparator props
-						// but this breaks when merge-results are recalled to their respective functions
-						// so the props have to be merged
-						// include comparator props as unifying props for convenience of caller
-						for(var prop in index){
-							if(boundIndex[prop] == null){
-								boundIndex[prop] = index[prop];
-							}
-						}
-						for(var j=0; j < (comparator.keytext||[]).length; j++){
-							var prop = comparator.keytext[j];
-							if(boundIndex[prop] == null){
-								var comProp = getRangeIdxComparatorProp(i, prop);
-								boundIndex[prop] = index[comProp];
-							}
-						}
-						for(var j=0; j < (comparator.score||[]).length; j++){
-							var prop = comparator.score[j];
-							if(boundIndex[prop] == null){
-								var comProp = getRangeIdxComparatorProp(i, prop);
-								boundIndex[prop] = index[comProp];
-							}
-						}
-						for(var j=0; j < (comparator.uid||[]).length; j++){
-							var prop = comparator.uid[j];
-							if(boundIndex[prop] == null){
-								var comProp = getRangeIdxComparatorProp(i, prop);
-								boundIndex[prop] = index[comProp];
+						// one idea is to push only ord props
+						// but callers may be interested in other fields e.g. for further joins
+						// so the props have to be merged; clashes have to be resolved with a namespace
+						if(!isRangeCount){
+							for(var fld in index){
+								var fieldMask = joinFieldMask[i][fld];
+								boundIndexMask[fieldMask] = index[fld];
 							}
 						}
 					}
@@ -226,7 +327,7 @@ true
 	function(err){
 		var ret = {code:1};
 		if(!utils.logError(err, 'join.mergeRanges')){
-			ret = {code:0, data:joinData};
+			ret = {code:0, data:joinData, ord:ord};
 		}
 		then(err, ret);	
 	}
