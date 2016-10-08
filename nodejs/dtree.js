@@ -43,7 +43,7 @@ var dtree = {
 			   */
 			  previouschain: null,
 			},
-	structs:[{
+	structs:[{						// this weird structure ([{},...]) helps distinguish lists from values
 		id:	zset,
 		structgetter: {	clusterinstance: null,
 				minvalue: null,

@@ -105,7 +105,7 @@ cmd = key.getCommand().rangeasc;		// range in ascending order
 // rl.singleIndexQuery()
 
 // mergers
-// rl.mergeRanges()
+// rl.mergeStreams()
 
 // migrants
 // rl.migrate()

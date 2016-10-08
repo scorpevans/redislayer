@@ -1146,12 +1146,15 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
 		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);
+		var keytext = datatype.getJointOrdProp(ord, 'keytext');
+		var score = datatype.getJointOrdProp(ord, 'score');
+		var uid = datatype.getJointOrdProp(ord, 'uid');
 		var startProp = index[label_start_prop];
 		var stopProp = index[label_stop_prop];
-		var startPropScoreIdx = ord.score.indexOf(startProp);
-		var startPropUIDIdx = ord.uid.indexOf(startProp);
-		var stopPropScoreIdx = ord.score.indexOf(stopProp);
-		var stopPropUIDidx = ord.uid.indexOf(stopProp);
+		var startPropScoreIdx = score.indexOf(startProp);
+		var startPropUIDIdx = uid.indexOf(startProp);
+		var stopPropScoreIdx = score.indexOf(stopProp);
+		var stopPropUIDidx = uid.indexOf(stopProp);
 		for(var prop in index){								// NB: some of these props are stray/unknown
 			var propIndex = datatype.getConfigFieldIdx(keyConfig, prop);
 			var propValue = index[prop];
@@ -1164,11 +1167,11 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 					// without declaration, it's assumed array is indeed raw value
 					// this should also apply to stray/extraneous props
 					continue;
-				}else if(!(ord.keytext.indexOf(prop) >= 0)		// prop is not essential to resolving the keyText
-					&& (startPropScoreIdx >= 0 && startPropScoreIdx > ord.score.indexOf(prop))	// out-of-bounds of query
-					&& (startPropUIDIdx >= 0 && startPropUIDIdx > ord.uid.indexOf(prop))
-					&& (stopPropScoreIdx >= 0 && stopPropScoreIdx > ord.score.indexOf(prop))
-					&& (stopPropScoreIdx >=0 && stopPropScoreIdx > ord.uid.indexOf(prop))){
+				}else if(!(keytext.indexOf(prop) >= 0)		// prop is not essential to resolving the keyText
+					&& (startPropScoreIdx >= 0 && startPropScoreIdx > score.indexOf(prop))	// out-of-bounds of query
+					&& (startPropUIDIdx >= 0 && startPropUIDIdx > uid.indexOf(prop))
+					&& (stopPropScoreIdx >= 0 && stopPropScoreIdx > score.indexOf(prop))
+					&& (stopPropScoreIdx >=0 && stopPropScoreIdx > uid.indexOf(prop))){
 					delete indexClone[prop];				// don't use prop
 					continue;
 				}else{ // cross-join the values of the different partitioned props with array values
@@ -1248,16 +1251,16 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 								break;
 							}
 						}
-						var idx = partitionIdx[i] || 0;			// indexes are initially null
+						var idx = partitionIdx[i] || 0;				// indexes are initially null
 						if(idx >= (partitionResults[i] || []).length){
 							// if a partition runs out of results, merging continues as usual with others
 							continue;
 						}
 						var index = partitionResults[i][idx];
-						var indexData = {};				// same fields; no need for joint_map here
+						var indexJointMap = null;				// same fields; no need for joint_map here
 						var reln = null;
 						if(boundIndex != null){
-							reln = datatype.getComparison(cmdOrder, null, ord, index, boundIndex||{}, indexData, indexData);
+							reln = datatype.getComparison(cmdOrder, null, ord, index, boundIndex, indexJointMap, indexJointMap);
 						}
 						if(boundIndex == null || reln == '<'){
 							boundPartition = i;

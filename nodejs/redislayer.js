@@ -79,6 +79,11 @@ redislayer = {
 	/**
 	 *
 	 */
+	getExcludeCursorLabel: query.getExcludeCursorLabel,
+
+	/**
+	 *
+	 */
 	singleIndexQuery: function(arg, then){
 	        var cmd = arg.cmd
 	        	, key = arg.key
@@ -109,14 +114,18 @@ redislayer = {
 	/**
 	 *
 	 */
-	mergeRanges: function(arg, then){
-		var rangeMode = arg.rangemode
-			, rangeOrder = arg.rangeorder
-			, ranges = arg.ranges
-			, comparator = arg.comparator
-			, joinType = arg.jointype
-			, limit = arg.limit;
-		join.mergeRanges(rangeMode, rangeOrder, ranges, comparator, joinType, limit, then);
+	streamConfig: join.streamConfig,
+	
+	/**
+	 *
+	 */
+	joinConfig: join.joinConfig,
+
+	/**
+	 *
+	 */
+	mergeStreams: function(arg, then){
+		join.mergeStreams(arg.joinconfig, then);
 	},
 	
 	// MIGRATE

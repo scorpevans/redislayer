@@ -5,7 +5,7 @@ utils.shallowCopy = function(myDict){
 	for(var key in (myDict || {})){
 		myClone[key] = myDict[key];
 	}
-	return myClone;
+	return (myDict != null ? myClone : null);
 };
 
 
