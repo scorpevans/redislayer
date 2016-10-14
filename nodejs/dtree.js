@@ -13,10 +13,10 @@ var dtree = {
 			   * provide a function(arg)
 			   * 	@arg is a dict with the fields {metacmd:, key:, keysuffixindex:, keyfield:)
 			   * 	@return the cluster-instance on which to perform a query
-			   * NB: metacmd is the generic command e.g. get (before deciding on a cluster specific commands can't be known)
+			   * NB: metacmd is the generic command e.g. get (before deciding on a cluster, specific commands can't be known)
 			   * NB: keysuffixindex is exactly like the index but with field values replaced with their keySuffix 
 			   *	keySuffixes group indexes into equivalent classes of their keyText
-        		   * 	this input is necessary to prevent clusterinstancefunction from making non-contiguous distribution of index
+        		   * 	this input is necessary to prevent clusterinstance function from making non-contiguous distribution of index
 			   *    as could have been the case with full index (as opposed to suffixes)
 			   */
 			  clusterinstance: null,
@@ -60,15 +60,15 @@ var dtree = {
 				// the index of a config specifies fields and how they should be used to compose the above
 				/**
 				 * list the complete set of fields associated with this object
-				 * the value remaining props correspond with the order of the field prop
+				 * the list-values of the other props correspond with the order of the field prop
 				 */
 			index:  { fields: ['gender', 'userid', 'username', 'fullname']
 				/**
 				 * specify if the name of the field itself (as opposed to the value) should be appended to the key-label
 				 * this cosmetic helps label keys nicely, and also serves for vertical partitioning
-				 * WARNING! UID should be a unique-identifier without field-branches inclusions
+				 * WARNING! UID should be a unique-identifier without field-branch inclusions; see offsetprependsuid prop
 				 *	in fact, field-branches should not be put into UID; this is a sign of a bad configuration
-				 *	otherwise there's no reference to use to rebuild the object once it is branched for storage
+				 *	otherwise there's no reference to use to rebuild the object after it is branched for storage
 				 *	see offsetprependsuid
 				 */
 				, fieldprependskey: [null, null, true, true]
@@ -77,7 +77,7 @@ var dtree = {
 				 * the remaining is cut off to suffix keys
 				 * the idea is to shorten values to meet storage restrictions e.g. in redis
 				 * 	or for horizontal partitioning, since keysuffixes lead to new keys
-				 * <offset> % 100 specifies the number of chars remove from the front of the value i.e. prefix-info
+				 * <offset> % 100 specifies the number of chars to remove from the front of the value i.e. prefix-info
 				 * <offset> / 100 specifies the number of trailing chars of the value (outside the prefix-info) to retain
 				 * e.g. offset=42 on value='10004567' would suffix the key with '100045' and retain '67'
 				 * 	whereas offset=49 on value='10004567' would suffix the key with '1000' and retain '4567'
@@ -88,10 +88,9 @@ var dtree = {
 				, offsets: [null, 500+idInfoOffset]
 				/**
 				 * if the design is such that several fields would produce the same keysuffix,
-				 * nominate an index to represent their keysuffix, instead of repeating the same suffix in the key
-				 * 	of course the designated index should be the field-index of one of the participating fields
+				 * specify the minimum index to represent their keysuffix; instead of repeating the same suffix in the key
 				 * with offsetgroups, several fields can be tried to find keysuffixes in cases of NULL values
-				 * 	this is essential for zset.zscore and zset.range, in which case keysuffix comes from either member/score
+				 * 	this is essential for zset.zscore and zset.range, in case keysuffix comes from either member/score
 				 */
 				, offsetgroups: []
 				/**
@@ -119,11 +118,12 @@ var dtree = {
 				 */
 				, factors: [redisMaxScoreFactor, 1]	// applies only to sorted-sets
 				/**
-				 * specify whether the field is a text or integer field
+				 * mandatory: specify whether the field is a text or integer field
 				 * this is very useful for SQL storages, and also for keyChains to determine the type to use for comparisons
 				 */
 				, types: ['integer', 'integer', 'text', 'text']},
-			// each field may have it's own getter except with clusterinstance
+			// each field may have it's own getter except with clusterinstance, which takes a single function
+			// obviously, inner getters/settings take precedence over outter ones
 			fieldgetter: {	clusterinstance: null,		// not defined per field
 					minvalue: [],
 					maxvalue: [],

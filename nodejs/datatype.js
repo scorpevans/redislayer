@@ -26,10 +26,10 @@ var	separator_key = ':',								// separator for parts of keys
 	default_get_field_min_value = (function(){return 0;}),				// returns current min value of field
 	default_get_field_max_value = (function(){return 0;}),				// returns current max value of field
 	default_get_next_chain = (function(suffix){					// returns next chain after given value
-				return ''+parseInt(suffix || 0, 10)+1;
+				return ''+parseFloat(suffix || 0, 10)+1;
 			}),
 	default_get_previous_chain = (function(suffix){					// return previous chain after given value
-				var prev = parseInt(suffix, 10)-1;
+				var prev = parseFloat(suffix, 10)-1;
 				return (prev >= 0 ? ''+prev : '');
 			});
 
@@ -519,7 +519,7 @@ datatype.isConfigFieldStrictlyUIDPrepend = function(config, field_idx){
 	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx);
 	var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx);
 	var isPrepend = datatype.isConfigFieldUIDPrepend(config, field_idx);
-	return isPrepend && offset != 0 && (factor==0 || factor==null);
+	return isPrepend && !datatype.isConfigFieldStrictlyKeySuffix(config, field_idx) && !datatype.isConfigFieldScoreAddend(config, field_idx);
 }
 
 // decide which hybrid of zrange to use
@@ -849,6 +849,7 @@ datatype.getConfigFieldOrdering = function(config, joint_map, joints){
 datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index_comparator, ref_comparator){
 	order = order || datatype.getAscendingOrderLabel();
 	var unmaskField = function(fld){return (unmasked_fields || [])[fld] || fld;};
+	var numeric = ['integer', 'float'];
 	// check keytext
 	var keytext = datatype.getJointOrdProp(ord, 'keytext');
 	for(var i=0; i < keytext.length; i++){
@@ -883,10 +884,9 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		var refVal = (offset == null ? ref[refProp] : datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0]);
 		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
 		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
-		// if one of the types is int, assume int comparison
-		if(indexFieldType == 'integer' || refFieldType == 'integer'){
-			indexVal = (indexVal != null && indexVal != '' ? parseInt(indexVal, 10) : -Infinity);
-			refVal = (refVal != null && indexVal != '' ? parseInt(refVal, 10) : -Infinity);
+		if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
+			indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
+			refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
 		}else{
 			indexVal = (indexVal != null ? ''+indexVal : '');
 			refVal = (refVal != null ? ''+refVal : '');
@@ -896,7 +896,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, keytext, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			utils.logError('datatype.getComparison, keytext, '+keytext+', '+indexVal+', '+refVal, 'FATAL:');
 			return null;
 		}
 	}
@@ -938,7 +938,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, score, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			utils.logError('datatype.getComparison, score, '+score+', '+indexVal+', '+refVal, 'FATAL:');
 			return null;
 		}
 	}
@@ -967,15 +967,24 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		primitiveIndex[indexField] = index[indexProp];
 		var primitiveRef = {};
 		primitiveRef[refField] = ref[refProp];
-		// as in redis, uid is ordered as a string
-		var indexVal = ''+ (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || '');
-		var refVal = ''+ (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || '');
+		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
+		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
+		var indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1];
+		var refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1];
+		// NB: integers stored in UIDs are prefixed in a way such that they are still correctly ordered
+		if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
+			indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
+			refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
+		}else{
+			indexVal = (indexVal != null ? ''+indexVal : '');
+			refVal = (refVal != null ? ''+refVal : '');
+		}
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 	       	}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, score, '+ord+', '+indexVal+', '+refVal, 'FATAL:');
+			utils.logError('datatype.getComparison, uid, '+uid+', '+indexVal+', '+refVal, 'FATAL:');
 			return null;
 		}
 	}

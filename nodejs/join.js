@@ -160,7 +160,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamProps[i].attributeIdx = attrIdx;
 		if((streamProps[i].argsCopy[attrIdx]||{}).limit == null){
 			streamProps[i].argsCopy[attrIdx] = utils.shallowCopy(streamProps[i].argsCopy[attrIdx]) || {};	// make a copy
-			streamProps[i].argsCopy[attrIdx].limit = defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = 1; //TODO defaultLimit;
 		}
 		streamProps[i].argsCopy.push('/*callback-place-holder*/');
 	}
@@ -327,8 +327,6 @@ true
 								datatype.resetJointOrdMask(myord);			// these are possibly only partial fields
 								fields = datatype.getConfigIndexProp(config, 'fields');
 							}
-							// TODO check that ords of all streamConfigs are in harmony
-							
 							ords.push(myord);
 							// merge ords into a single ord
 							// all ords are equivalent except for the fieldconfig props, which have to be merged
@@ -336,6 +334,34 @@ true
 							mergeOrds(ord, j, myord, fields, config, namespace, joint_map, joints);
 							if(j == 0){
 								ord = ords[0];
+							}else{	// check that ords of all streamConfigs are in harmony
+								var prevOrd = ords[j-1];
+								var k1 = datatype.getJointOrdProp(myord, 'keytext');
+								var s1 = datatype.getJointOrdProp(myord, 'score');
+								var u1 = datatype.getJointOrdProp(myord, 'uid');
+								var k2 = datatype.getJointOrdProp(prevOrd, 'keytext');
+								var s2 = datatype.getJointOrdProp(prevOrd, 'score');
+								var u2 = datatype.getJointOrdProp(prevOrd, 'uid');
+								var isCongruent = (k1.length == k2.length && s1.length == s2.length && u1.length == u2.length);
+								for(var k=0; isCongruent && k < k1.length; k++){
+									if(k1[k][0] != k2[k][0] || k1[k][1] != k2[k][1]){
+										isCongruent = false;
+									}
+								}
+								for(var k=0; isCongruent && k < s1.length; k++){
+									if(s1[k][0] != s2[k][0] || s1[k][1] != s2[k][1]){
+										isCongruent = false;
+									}
+								}
+								for(var k=0; isCongruent && k < u1.length; k++){
+									if(u1[k][0] != u2[k][0] || u1[k][1] != u2[k][1]){
+										isCongruent = false;
+									}
+								}
+								if(!isCongruent){
+									var err = 'join.mergeStreams: the streams '+(j-1)+' and '+j+' do not have the same ordering';
+									return then(err);
+								}
 							}
 						}
 					}

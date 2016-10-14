@@ -6,9 +6,9 @@ var redisDB = require('redis');
 var cluster = {};
 
 	// CONFIGURATIONS
-var	clusterid = '0000',
+var	clusterid = '1000',
 	instance = {
-		'0000': {id: '0000', label: 'redis_6379', val: redisDB.createClient(), type: 'redis'},
+		'1000': {id: '1000', label: 'redis_6379', val: redisDB.createClient(), type: 'redis'},
 	},
 	default_instance = instance[clusterid];
 

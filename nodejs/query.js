@@ -59,7 +59,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		if(!(field in index)){
 			continue;
 		}
-		var fieldIndex =  i;							// datatype.getConfigFieldIdx(keyConfig, field)
+		var fieldIndex =  i;
 		var fieldVal = index[field];
 		var splits = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
 		// key suffixes and branches
@@ -90,10 +90,20 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		if(datatype.isConfigFieldUIDPrepend(keyConfig, fieldIndex)){
 			// use fieldIndex for ordering but remember there may be gaps i.e. ['', ,'234'] to be removed
 			// in case of <null> use empty-string concats in order to prevent order mismatches
-			uidPrefixes[type][fieldIndex] = (splits[1] != null ? splits[1]+'' : '');		// 0 => '0'
+			// for zset, prefix floats with 'a's so they maintain their sorting; see datatype.getConfigOrdering
+			var mytype = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
+			var pad = '';
+			if(splits[1] != null){
+				if(struct == 'zset' && (mytype == 'float' || mytype == 'integer')){
+					pad = Array((Math.floor(splits[1])+'').length).join('a') + splits[1];	// e.g. 13.82 -> a13.82
+				}else{
+					pad = ''+splits[1];
+				}
+			}
+			uidPrefixes[type][fieldIndex] = pad;
 		}
 		if(struct == 'zset'){
-			if(splits[1] != null){
+			if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 				var addend = datatype.getFactorizedConfigFieldValue(keyConfig, field, splits[1]);
 				if(addend != null){
 					if(type == usual){
@@ -114,17 +124,17 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		}
 		// NB: upsert can NOT cause changes in key/keysuffix
 		// since keySuffixes+UID are required to be complete in order to identify target
-		// besides since keyChains are anyway restricted to the same cluster-instance this can be managed by a lua-script
+		// => in case upsert is tried on such fields, only the non-keysuffix portion is updated
 		if(utils.startsWith(command.getType(cmd), 'upsert')){
 			if(struct == 'zset'){
-				if(splits[1] != null){
-					var pvf = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', fieldIndex);
+				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 					var outOfBounds = 1000*redisMaxScoreFactor;		// just large enough
+					var pvf = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', fieldIndex);
 					var next_pvf = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex) || outOfBounds;
-					luaArgs[type][fieldIndex] = [fieldVal, pvf, next_pvf];
+					luaArgs[type][fieldIndex] = [splits[1]||0, pvf, next_pvf];
 				}
 			}else{
-				luaArgs[type][fieldIndex] = (splits[1] != null ? [fieldVal] : [label_lua_nil]);
+				luaArgs[type][fieldIndex] = (splits[1] != null ? [splits[1]] : [label_lua_nil]);
 			}
 		}
 	}
@@ -220,6 +230,29 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 	return storageAttr;
 };
 
+removePaddingFromZsetUID = function(val){
+	if(val){
+		var len = val.indexOf('.');
+		if(len < 0){
+			len = val.length;
+		}
+		val = val.slice(Math.floor((len-1)/2));
+	}else{
+		val = null;
+	}
+	return val;
+};
+removeSubsequenceDuplicates = function(ll){
+	var len = (ll || []).length;
+	var uniq = [];
+	for(var i=0; i < len; i++){
+		var lastUniq = uniq[uniq.length-1];
+		if(lastUniq == null || (ll[i] != null && ll[i] > lastUniq)){
+			uniq.push(ll[i]);
+		}
+	}
+	return uniq;
+};
 parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 	// NB: if <xid> is null, <uid> still has to be parsed
 	var index = {};
@@ -240,6 +273,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
 		var fieldIndex = i;
+		var type = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
 		var fieldOffset = offsets[fieldIndex];
 		if(datatype.isConfigFieldBranch(keyConfig, fieldIndex)){
 			// check if string at the leftmost end of keyPrefixes matches this field
@@ -254,7 +288,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 					// for now all field-branches are excluded, and conditionally added later
 					// this is because this code-path runs only once and a cached value is use thereafter
 					if(datatype.isConfigFieldKeySuffix(keyConfig, j)){
-						fkeyPartIndexes[j] = keySuffixCount;					// NB: reverse index
+						fkeyPartIndexes[j] = keySuffixCount;			// NB: reverse index
 						if(!datatype.isConfigFieldBranch(keyConfig, j)){
 							keySuffixCount++;
 						}
@@ -262,7 +296,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 					// take care to account for no more than a single field-branch
 					// since different field-branches are not stored together
 					if(datatype.isConfigFieldUIDPrepend(keyConfig, j)){
-						fuidPartIndexes[j] = uidPrependCount;					// forward index
+						fuidPartIndexes[j] = uidPrependCount;			// forward index
 						uidPrependCount++;
 						if(datatype.isConfigFieldBranch(keyConfig, j)){
 							uidPrependCount--;
@@ -277,12 +311,12 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				continue;
 			}else{
 				fld = field;
-				// every command requires either xid or uid components, so one of them is given
+				// every command requires either xid or uid components, so one of them must be given
 				// the output of the command is the other component
-				// so if that other is null, the return should be null
-				// actually, given existing commands, UID cannot be unknown! is incomplete though in the case of field-branches
-				// XID can be incomplete!!
-				// this is handled specially since otherwise and index={...} may be returned
+				// so if that given is null, the return should be null
+				// actually, given existing commands, UID cannot be unknown/incomplete
+				// though in the case of field-branches XID can be incomplete!!
+				// this is handled specially since otherwise index={...} may be returned instead of a NULL
 				// since some fields can be constructed with the available component
 				if(xid == null || uid == null){
 					return {index:null, field:null, fuid:fld};
@@ -298,11 +332,9 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				fuid = [keyLabel].concat(neutralKeyParts).concat(neutralUIDParts).join(separator_key);
 			}
 		}
-		if(datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){	// can't find it elsewhere
-			// NB: keys may already have long separated parts; hence count from the lhs
-			// find exact position of this field's addendum
-			// check preceding fields if they have addendums in the uid
-			// NB: critical to have addendums ordered by fieldIndex
+		if(datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){
+			// can't find it elsewhere
+			// otherwise values could be found in keytext and/or score
 			var uidIndex = 0;
 			for(var h=0; h < fieldIndex; h++){
 				if(datatype.isConfigFieldUIDPrepend(keyConfig, h)
@@ -310,11 +342,16 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 					uidIndex++;
 				}
 			}
-			index[field] = uidParts[uidIndex];
+			var fieldVal = uidParts[uidIndex];
+			// for zsets, remove padding a's in the case of numerics 
+			if(struct == 'zset' && (type == 'integer' || type == 'float')){
+				fieldVal = removePaddingFromZsetUID(fieldVal);
+			}
+			index[field] = fieldVal;
 		}else if(xid != null){
 			if(struct != 'zset'){
-				var xidIndex = 0;
 				// count xid prepends across field-branches => exclude field-branch prepends
+				var xidIndex = 0;
 				for(var h=0; h < fieldIndex; h++){
 					if(!datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, h)
 						&& !datatype.isConfigFieldBranch(keyConfig, h)){
@@ -322,14 +359,14 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 					}
 				}
 				index[field] = xidParts[xidIndex];
-			}else if(factors[fieldIndex] != null){
-				// basic splicing of field's uid from score
+			}else if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
+				// basic splicing of field's component from score
 				var fact = factors[fieldIndex];
 				var preFact = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex);
 				var val = Math.floor((preFact ? xid % preFact : xid) / fact);
 				index[field] = val;
 			}
-		}else if((factors[fieldIndex] || 0) != 0){
+		}else if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 			delete index[field];	// xid is required to complete the value
 			continue;
 		}
@@ -342,18 +379,25 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				// NB: critical to have addendums ordered by fieldIndex
 				var keyIndex = 0;
 				var fieldBranchCounts = 0;
+				// handle offgroups
 				var offsetGroupIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'offsetgroups', fieldIndex);
-				if(offsetGroupIndex == null){
+				var keySuffixOffsets = offsets;
+				if(offsetGroupIndex != null){
+					var offsetGroups = datatype.getConfigIndexProp(keyConfig, 'offsetgroups');
+					keySuffixOffsets = removeSubsequenceDuplicates(offsetGroups);
+				}else{
 					offsetGroupIndex = fieldIndex;
 				}
-				for(var h=offsets.length-1; h > offsetGroupIndex; h--){
-					if(datatype.isConfigFieldKeySuffix(keyConfig, h)){
+				// count keysuffix offset
+				for(var h=keySuffixOffsets.length-1; h > offsetGroupIndex; h--){
+					var idx = (offsetGroupIndex != null ? keySuffixOffsets[h] : h);
+					if(datatype.isConfigFieldKeySuffix(keyConfig, idx)){
 						// do not count more than a single fieldBranch
 						// since fieldBranches are stored separately
-						if(!datatype.isConfigFieldBranch(keyConfig, h) || (fieldBranchCounts == 0
-							&& (!datatype.isConfigFieldBranch(keyConfig, offsetGroupIndex) || h == offsetGroupIndex))){
+						if(!datatype.isConfigFieldBranch(keyConfig, idx) || (fieldBranchCounts == 0
+							&& (!datatype.isConfigFieldBranch(keyConfig, offsetGroupIndex) || idx == offsetGroupIndex))){
 								keyIndex++;
-							if(datatype.isConfigFieldBranch(keyConfig, h)){
+							if(datatype.isConfigFieldBranch(keyConfig, idx)){
 								fieldBranchCounts++;
 							}
 						}
@@ -365,6 +409,10 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				delete index[field];		// key_text is required to complete value
 				continue;
 			}
+		}
+		// typecasting
+		if(type == 'integer' || type == 'float'){
+			index[field] = parseFloat(index[field], 10);
 		}
 	}
 	return {index:(index == {} ? null : index), field:fld, fuid:fuid};
@@ -745,7 +793,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 					+ '    return 0;'
 					+ 'end;';
 			}else{
-				if(xid != null /*&& command.requiresXID(cmd)*/){
+				if(xid != null){
 					args.unshift(xid);
 				}
 			}
@@ -787,7 +835,6 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 			if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
 				cmd = cmd.getMode()[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
 			}
-			// TODO test update function
 			if(utils.startsWith(command.getType(cmd), 'upsert')){
 				lua = ' local score = redis.call("zscore", KEYS[1], ARGV[1]);'
 					+ 'if score == nil then'
@@ -806,8 +853,6 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 					+ '    return 0;'
 					+ 'end;';
 				luaArgs.unshift(uid);
-console.log('============================');
-console.log(luaArgs);
 			}else if(utils.startsWith(command.getType(cmd), 'rankbyscorelex')){
 				// NB: a partial-score may be present so score==null is false
 				// .bylex requires args so when missing => zcard
