@@ -399,7 +399,9 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				// handle offgroups
 				var offsetGroupIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'offsetgroups', fieldIndex);
 				var keySuffixOffsets = offsets;
+				var isOffsetGroup = false;
 				if(offsetGroupIndex != null){
+					isOffsetGroup = true;
 					var offsetGroups = datatype.getConfigIndexProp(keyConfig, 'offsetgroups');
 					keySuffixOffsets = removeSubsequenceDuplicates(offsetGroups);
 				}else{
@@ -407,7 +409,7 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				}
 				// count keysuffix offset
 				for(var h=keySuffixOffsets.length-1; h > offsetGroupIndex; h--){
-					var idx = (offsetGroupIndex != null ? keySuffixOffsets[h] : h);
+					var idx = (isOffsetGroup ? keySuffixOffsets[h] : h);
 					if(datatype.isConfigFieldKeySuffix(keyConfig, idx)){
 						// do not count more than a single fieldBranch
 						// since fieldBranches are stored separately

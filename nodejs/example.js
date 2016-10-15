@@ -29,18 +29,21 @@ rl.loadtree({dtree:dtree});		// load dtree into redislayer
 
 // 2. start querying your data-layer via redislayer; see redislayer.js for API
 // Note that there's no reference to where/how to fetch/save the data; see dtree.js for configuration
-// 	this means the storage config can be changed without changing your code
+// 	this means that, in most cases, the storage config can be changed without changing your code
 // 	and migration is just a function call
 
+
 // setters
+
 var key = rl.getKey().key1;
 var cmd = key.getCommand().add;
 var index = {gender: 1, userid: 12300, firstname: 'firstname1', lastname: 'lastname1'};
 var attr = {nx: true};
-var arg = {cmd:cmd, key:key, index:index, attribute:attr};
+var arg = {cmd:cmd, key:key, indexorrange:index, attribute:attr};
 rl.singleIndexQuery(arg, function(err, result){
+	console.log('[1]');
 	if(err || result.code != 0){
-		console.log('Oops!');
+		console.log('Oops! '+err);
 	}else{
 		console.log('Hurray! ... '+result.data);
 	}
@@ -51,35 +54,40 @@ var idx2 = {gender: 1, userid: 12311, firstname: 'firstname3', lastname: 'lastna
 var indexList = [{index:idx1, attribute:attr}, {index:idx2, attribute:attr}];
 var arg = {cmd:cmd, key:key, indexlist:indexList};
 rl.indexListQuery(arg, function(err, result){
+	console.log('[2]');
 	if(err || result.code != 0){
-		console.log('Oops!');
+		console.log('Oops! '+err);
 	}else{
 		console.log('Hurray! ... '+result.data);
 	}
 });
 
 // getters
+
 cmd = key.getCommand().get;
 index = {gender: 9,			// irrelevant field i.e. not an element of keytext of UID; returned value may differ
 	//lastname: null,		// only field-branches which explicitly exist in Object.keys() are searched/returned
 	 userid: 12300,
 	 firstname: 'firstname1'};
-var arg = {cmd:cmd, key:key, index:index};
+var arg = {cmd:cmd, key:key, indexorrange:index};
 rl.singleIndexQuery(arg, function(err, result){
+	console.log('[3]');
 	if(err || result.code != 0){
-		console.log('Oops!');
+		console.log('Oops! '+err);
 	}else{
 		console.log(result.data);
 	}
 });
+
 	// search across field-branches lastname and firstname
 index = { userid: 12300,
 	 lastname: 'lastname1',
 	 firstname: 'firstname1'};
-var arg = {cmd:cmd, key:key, index:index};
+var arg = {cmd:cmd, key:key, indexorrange:index};
 rl.singleIndexQuery(arg, function(err, result){
+	console.log('[4]');
 	if(err || result.code != 0){
-		console.log('Oops!');
+		console.log('Oops! '+err);
 	}else{
 		console.log(result.data);
 	}
@@ -89,10 +97,11 @@ rl.singleIndexQuery(arg, function(err, result){
 index = { userid: 12300,
 	 lastname: 'lastname2',
 	 firstname: 'firstname1'};
-var arg = {cmd:cmd, key:key, index:index};
+var arg = {cmd:cmd, key:key, indexorrange:index};
 rl.singleIndexQuery(arg, function(err, result){
+	console.log('[5]');
 	if(err || result.code != 0){
-		console.log('Oops!');
+		console.log('Oops! '+err);
 	}else{
 		console.log(result.data);
 	}
