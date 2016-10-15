@@ -11,8 +11,6 @@ var join = {};
 var	access_code = 'join._do_not_access_fields_with_this';
 
 
-
-var excludeCursorLabel = query.getExcludeCursorLabel();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 var defaultLimit = query.getDefaultBatchLimit();
@@ -57,25 +55,25 @@ join.joinConfig = function joinConfig(){
 // subsequent calls receive namespaced-fields
 // the respective namespaced-fields must be trimmed and used as cursor
 // NB: namespaces are required to uniquely identify a join-streams even across calls
-//	using array indexes, for example, is a bad idea!
+//	using array indexes as namespaces, for example, is a bad idea!
 join.getNamespaceCursor = function(namespace, cursor){
 	if(cursor == null){
 		return cursor;
-	}else if(!namespace){
-		return utils.shallowCopy(cursor);
 	}
-	var nspCursor = {};
-	var joinAttributes = {'_start_prop': true, '_stop_prop':true};
-	joinAttributes[excludeCursorLabel] = true;
-	for(k in cursor){
-		if(joinAttributes[k] == true){
-			nspCursor[k] = cursor[k];
-		}else if(utils.startsWith(k, namespace+'.')){
+	cursorClone = query.cloneRangeConfig(cursor);
+	if(!namespace){
+		return cursorClone;
+	}
+	var index = cursorClone.index;
+	var nspIndex = {};
+	for(k in index || {}){
+		if(utils.startsWith(k, namespace+'.')){
 			var kk = k.slice(namespace.length+1);
-			nspCursor[kk] = cursor[k];
+			nspIndex[kk] = index[k];
 		}
 	}
-	return nspCursor;
+	cursorClone.index = nspIndex;
+	return cursorClone;
 };
 
 // adhoc Ords for functions which have to participate in a join but lacking .keys prop in their resultset
@@ -160,7 +158,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamProps[i].attributeIdx = attrIdx;
 		if((streamProps[i].argsCopy[attrIdx]||{}).limit == null){
 			streamProps[i].argsCopy[attrIdx] = utils.shallowCopy(streamProps[i].argsCopy[attrIdx]) || {};	// make a copy
-			streamProps[i].argsCopy[attrIdx].limit = 1; //TODO defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = defaultLimit;
 		}
 		streamProps[i].argsCopy.push('/*callback-place-holder*/');
 	}
@@ -181,8 +179,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 	var boundIndexIdx = -1;
 	var boundIndexMask = {};
 	var innerJoinCount = 0;
-	var refreshIdx = null;						// point where joins are left off to fetch data
-	var refreshIndex = null;
+	var refreshIdx = null;						// the index of streamIndexes where joins are left off to fetch data
 	var ord = null;							// the merges ord of the rangeconfigs
 	limit = limit || Infinity;					// NB: not to be confused with limit in <attribute>
 	if(limit <= 0){
@@ -207,34 +204,28 @@ join.mergeStreams = function mergeStreams(join_config, then){
 				// if the re-fetch doesn't progress the cursor we're not going to terminate
 				if(refreshIdx != null){
 					var str = streamIndexes[refreshIdx];
-					var res = streamProps[str].results || [];
-					var lastIndex = res[res.length-1];
-					if(lastIndex){
+					var cursorIdx = streamProps[str].cursorIdx;
+					var cursor = streamProps[str].argsCopy[cursorIdx];
+					var cursorIndex = cursor.index;
+					var firstIndex = (streamProps[str].results || [])[0];
+					if(firstIndex){
 						var jm = streamConfigs[str].jointMap;
 						var reln = null;
 						try{
-							reln = datatype.getComparison(streamOrder, unMaskedFields, ord, lastIndex, refreshIndex, jm, jm);
+							reln = datatype.getComparison(streamOrder, unMaskedFields, ord, firstIndex, cursorIndex, jm, jm);
 						}catch(error){
 							return then(error);
 						}
 						if(reln != '>'){
 							var func = streamConfigs[str].func.name || '';
-							var err = 'loop detected; the cursor for '+func+'(stream['+str+']) does not move further';
+							var err = 'repetition detected; the cursor for '+func+'(stream['+str+']) is included in next-fetch';
 							return then(err);
 						}
 					}
 				}
 				// compare next values across the partitions and pick the least
-				// direction of iteration is due to possible splicing-out of exhausted streamConfigs
+				// direction of iteration is due to possible splicing-out of exhausted streamIndexes
 				// iteration starts at refreshIdx i.e. where it was left off for fresh data
-/* TODO WTF!!!
-> null > 0
-false
-> null == 0
-false
-> null >= 0
-true
-*/
 				refreshIdx = (refreshIdx != null && refreshIdx >= 0 ? refreshIdx : streamIndexes.length-1);
 				for(var i=refreshIdx; true; i--){
 					if(i == -1){
@@ -289,14 +280,19 @@ true
 							}
 						}else{	// if stream runs out of batch, the search pauses for refresh
 							// update the cursor of the args
-							refreshIdx = i;							// continue from this iteration
-							refreshIndex = streamProps[str].results[idx-1];			// refresh should proceed beyond this
-							if(refreshIndex){
-								refreshIndex[excludeCursorLabel] = true;
-							}
 							var cursorIdx = streamProps[str].cursorIdx;
-							streamProps[str].argsCopy[cursorIdx] = refreshIndex;
-							streamProps[str].results = null;				// initiate refresh
+							var cursor = streamProps[str].argsCopy[cursorIdx];
+							var cursorIndex = streamProps[str].results[idx-1];		// refresh should proceed beyond this
+							if(cursor != null){
+								cursor.index = cursorIndex;
+							}else{
+								cursor = new query.rangeConfig(cursorIndex);
+								streamProps[str].argsCopy[cursorIdx] = cursor;
+							}
+							cursor.excludeCursor = true;
+							// initiate refresh
+							refreshIdx = i;							// continue from this iteration
+							streamProps[str].results = null;
 							streamProps[str].resultsIdx = 0;
 							break;
 						}

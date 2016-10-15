@@ -8,23 +8,8 @@ var command = datatype.command;
 var query = {};
 	// CONFIGURATIONS
 var	const_limit_default = 50,				// result limit for performing internal routines
-	label_lua_nil = '_nil',					// passing raw <nil> to lua is not exactly possible
-	label_functions = '_functions',				// passed function(s) are passed here
-	label_function_args = '_function_args',			// when functions are passed the args are held here
-	label_attribute_idxs = '_attribute_idxs',		// when function are passed the attribute index location(s) are held here
-	label_cursor_idxs = '_cursor_idxs',			// when function args are passed, possible cursor location(s) are held here
-	label_start_prop = '_start_prop',
-	label_stop_prop = '_stop_prop',
-	label_exclude_cursor = '_exclude_cursor';
+	label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possible
 
-query.getDefaultBatchLimit = function(){
-	return const_limit_default;
-};
-// TODO deprecate the following function
-//	=> provide instead functions to readily read the target objects
-query.getExcludeCursorLabel = function(){
-	return label_exclude_cursor;
-};
 
 var separator_key = datatype.getKeySeparator();
 var separator_detail = datatype.getDetailSeparator();
@@ -32,6 +17,38 @@ var collision_breaker = datatype.getCollisionBreaker();
 var redisMaxScoreFactor = datatype.getRedisMaxScoreFactor();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
+
+
+query.getDefaultBatchLimit = function(){
+	return const_limit_default;
+};
+
+
+query.rangeConfig = function(index){
+	this.index = index;		// an index representing an object
+	this.startProp = null;		// the prop which should be used to compute the starting point based on the Index
+	this.stopProp = null;		// the prop which should be used to compute the stopping point
+	this.boundValue = null;		// inclusive max/min value for stopProp; else ranging stops when value change from Index's value
+	this.excludeCursor = false;	// in case of paging, used to specify if cursor position should be skipped
+	this.cursorMatchOffset = null;	// in case joins, used to specify amount of already returned values which match the cursor position 
+	var that = this;
+	this.clone = function cloneRangeConfig(){
+		var rc = new query.rangeConfig(that.index);
+		rc.startProp = that.startProp;
+		rc.stopProp = that.stopProp;
+		rc.boundValue = that.boundValue;
+		rc.excludeCursor = that.excludeCursor;
+		rc.offset = that.offset;
+		return rc;
+	};
+};
+
+query.cloneRangeConfig = function(rc){
+	if(rc == null){
+		return null;
+	}
+	return rc.clone();
+};
 
 
 parseIndexToStorageAttributes = function(key, cmd, index){
@@ -440,8 +457,8 @@ getKeyRangeMaxByProp = function(key, index, score, prop){
 	return maxScore;
 };
 
-getKeyRangeMinByProp = function(key, index, score, prop){
-	var min = (index || {}).min;
+getKeyRangeMinByProp = function(key, range_config, score, prop){
+	var min = range_config.boundValue;
 	var keyConfig = datatype.getKeyConfig(key);
 	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
 	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
@@ -459,33 +476,33 @@ getKeyRangeMinByProp = function(key, index, score, prop){
 	return minScore;
 };
 
-getKeyRangeStartScore = function(range_order, key, index, score){
+getKeyRangeStartScore = function(range_order, key, range_config, score){
 	var startScore = null;
-	var startBound = (index[label_exclude_cursor] ? '(' : '');
+	var startBound = (range_config.excludeCursor ? '(' : '');
 	if(range_order == asc){
-		startScore = getKeyRangeMinByProp(key, index, score, (index||{})[label_start_prop]);
+		startScore = getKeyRangeMinByProp(key, range_config, score, range_config.startProp);
 	}else if(range_order == desc){
-		startScore = getKeyRangeMaxByProp(key, index, score, (index||{})[label_start_prop]);
+		startScore = getKeyRangeMaxByProp(key, range_config, score, range_config.startProp);
 	}
 	return startBound+startScore;
 };
 
-getKeyRangeStopScore = function(range_order, key, index, score){
+getKeyRangeStopScore = function(range_order, key, range_config, score){
 	var stopScore = null;
 	if(range_order == asc){
-		stopScore = getKeyRangeMaxByProp(key, index, score, (index||{})[label_stop_prop]);
+		stopScore = getKeyRangeMaxByProp(key, range_config, score, range_config.stopProp);
 	}else if(range_order == desc){
-		stopScore = getKeyRangeMinByProp(key, index, score, (index||{})[label_stop_prop]);
+		stopScore = getKeyRangeMinByProp(key, range_config, score, range_config.stopProp);
 	}
 	return stopScore;
 };
 
-getKeyRangeStartMember = function(range_order, key, index, member){
+getKeyRangeStartMember = function(range_order, key, range_config, member){
 	var startMember = member;
-	var startProp = (index||{})[label_start_prop];
+	var startProp = range_config.startProp;
 	var keyConfig = datatype.getKeyConfig(key);
 	var startPropIndex = datatype.getConfigFieldIdx(keyConfig, startProp);
-	var startBound = (index[label_exclude_cursor] ? '(' : '[');
+	var startBound = (range_config.excludeCursor ? '(' : '[');
 	if(member != null){
 		// stripe off from member-parts, all prop-suffixes until the startProp
 		// NB: the algorithm here assumes the index holds all props till the startProp
@@ -502,7 +519,7 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 		}
 		var tray = member.split(separator_detail).splice(0, offsets);
 		// increment the last character in case of descending
-		if(range_order != asc && !index[label_exclude_cursor]){
+		if(range_order != asc && !range_config.excludeCursor){
 			var incr = 1;
 			var lastStr = tray[tray.length-1];
 			var nextStr = lastStr.slice(0, -1)+String.fromCharCode(lastStr.charCodeAt(lastStr.length-1)+incr);
@@ -515,7 +532,7 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 		var offsetPrependsUID = datatype.getConfigIndexProp(keyConfig, 'offsetprependsuid') || [];
 		var isLastPrepend = (offsetPrependsUID.lastIndexOf(true) == startPropIndex);
 		if(startProp != null && datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex) && !isLastPrepend){
-			tray.push('');							// character preceding all others
+			tray.push('');						// character preceding all others
 		}
 		startMember = tray.join(separator_detail);
 	}
@@ -527,9 +544,9 @@ getKeyRangeStartMember = function(range_order, key, index, member){
 	return startMember;
 };
 
-getKeyRangeStopMember = function(range_order, key, index, member){
+getKeyRangeStopMember = function(range_order, key, range_config, member){
 	var stopMember = null;
-	var stopProp = (index||{})[label_stop_prop];
+	var stopProp = range_config.stopProp;
 	var keyConfig = datatype.getKeyConfig(key);
 	var stopPropIndex = datatype.getConfigFieldIdx(keyConfig, stopProp);
 	if(member != null){
@@ -544,9 +561,9 @@ getKeyRangeStopMember = function(range_order, key, index, member){
 			}
 		}
 		var tray = member.split(separator_detail).splice(0, offsets);
-		// NB: min/max prop not used in getKeyRangeStartMember since index can be used to represent that
-		// NB: in case of a <min/max> argument, we have to deal with a string instead of char
-		var stop = (range_order == desc ? (index || {}).min : (index || {}).max);	// max/min allowed value for stopProp
+		// NB: boundValue not used in getKeyRangeStartMember since index can be used to represent that
+		// NB: in case of a boundValue argument, we have to deal with a string instead of char
+		var stop = range_config.boundValue;
 		if(stop != null){
 			tray[tray.length-1] = String(stop);
 		}
@@ -758,7 +775,7 @@ queryDBInstance = function(cluster_instance, cmd, keys, key_type, key_field, key
 	});
 };
 
-getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attribute, field, storage_attribute){
+getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, rangeConfig, attribute, field, storage_attribute){
 	var key = keys[0];
 	var keyConfig = datatype.getKeyConfig(key);
 	var keyLabel = datatype.getKeyLabel(key);
@@ -860,7 +877,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 				if(/*score == null &&*/ uid == null){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
+					var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
 					if(startScore == Infinity || startScore == -Infinity){
 						startScore = null;
 					}
@@ -896,7 +913,7 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 				// so [member] argument can be tweaked for the desired result
 				var limit = attribute.limit;
 				// NB: if startScore must be used, range [prop] must be provided
-				var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
+				var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
 				if(startScore == Infinity || startScore == -Infinity){
 					startScore = null;
 				}
@@ -942,8 +959,8 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 				if(utils.startsWith(command.getType(cmd), 'countbylex') && uid == null){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startMember = getKeyRangeStartMember(rangeOrder, key, index, uid);
-					var stopMember = getKeyRangeStopMember(rangeOrder, key, index, uid);
+					var startMember = getKeyRangeStartMember(rangeOrder, key, rangeConfig, uid);
+					var stopMember = getKeyRangeStopMember(rangeOrder, key, rangeConfig, uid);
 					args.unshift(stopMember);
 					args.unshift(startMember);
 				}
@@ -952,8 +969,8 @@ getClusterInstanceQueryArgs = function(cluster_instance, cmd, keys, index, attri
 				if(utils.startsWith(command.getType(cmd), 'countbyscore') && (xid == null || xid == '')){
 					cmd = datatype.getCommandMode(datatype.getConfigCommand(keyConfig).count).bykey;
 				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, index, xid);
-					var stopScore = getKeyRangeStopScore(rangeOrder, key, index, xid);
+					var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
+					var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
 					args.unshift(stopScore);
 					args.unshift(startScore);
 				}
@@ -989,10 +1006,12 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 	var key = keys[0];
 	var keyLabel = datatype.getKeyLabel(key);
 	var keyConfig = datatype.getKeyConfig(key);
+	var isRangeCommand = command.isOverRange(original_cmd);
 	// PREPROCESS: prepare instanceKeySet for bulk query execution
 	for(var i=0; i < len; i++){
 		var elem = qData_list[i];
-		var index = elem.index || {};
+		var rangeConfig = (isRangeCommand ? elem.rangeconfig : null);
+		var index = (isRangeCommand ? rangeConfig.index : elem.index) || {};
 		var attribute = elem.attribute || {};							// limit, offset, nx, etc
 		var storageAttr = parseIndexToStorageAttributes(key, original_cmd, index);
 		var saKeys = Object.keys(storageAttr ||{});
@@ -1005,7 +1024,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 			}
 			var clusterInstance = getQueryDBInstance(original_cmd, keys, index, field);
 			var clusterInstanceId = cluster.getInstanceId(clusterInstance);
-			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstance, original_cmd, keys, index, attribute, field, fsa);
+			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstance, original_cmd, keys, index, rangeConfig, attribute, field, fsa);
 			// bulk up the different key-storages for bulk-execution
 			var keyText = dbInstanceArgs.keytext;
 			if(!instanceKeySet[clusterInstanceId]){
@@ -1047,7 +1066,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 					var withscores = (attribute || {}).withscores;
 					if(Array.isArray(result.data)){
 						resultType = 'array';
-						var isRangeCommand = command.isOverRange(cmd);
+						isRangeCommand = command.isOverRange(cmd);
 						// although resultset is actually an array i.e. with integer indexes,
 						// dict is used to maintain positioning/indexing when elements are deleted
 						// 	fuidIdx references these positions/indexes
@@ -1175,7 +1194,7 @@ getResultSet = function(original_cmd, keys, qData_list, then){
 	});
 }
 
-query.singleIndexQuery = function(cmd, key, index, attribute, then){
+query.singleIndexQuery = function(cmd, key, index_or_rc, attribute, then){
 	var keys = [key];				// TODO deprecate
 	// querying fields with partitions is tricky
 	// execute the different partitions separately and merge the results
@@ -1186,16 +1205,18 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 	var partitionCrossJoins = [];
 	var indexClone = null;						// prevent mutating <index>
 	var ord = null;
-	index = index || {};
-	if(datatype.isConfigPartitioned(keyConfig) && (utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count'))){
+	var isRangeQuery = command.isOverRange(cmd);
+	var rangeConfig = (isRangeQuery ? index_or_rc || new query.rangeConfig(null) : null);
+	var index = (isRangeQuery ? rangeConfig.index : index_or_rc) || {};
+	if(datatype.isConfigPartitioned(keyConfig) && isRangeQuery){
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
 		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);
 		var keytext = datatype.getJointOrdProp(ord, 'keytext');
 		var score = datatype.getJointOrdProp(ord, 'score');
 		var uid = datatype.getJointOrdProp(ord, 'uid');
-		var startProp = index[label_start_prop];
-		var stopProp = index[label_stop_prop];
+		var startProp = rangeConfig.startProp;
+		var stopProp = rangeConfig.stopProp;
 		var startPropScoreIdx = score.indexOf(startProp);
 		var startPropUIDIdx = uid.indexOf(startProp);
 		var stopPropScoreIdx = score.indexOf(stopProp);
@@ -1250,26 +1271,34 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 			}
 		}
 	}
-	var singleIndexList = [{index:(indexClone || index), attribute:attribute}];
+	var rangeConfigClone = null;
+	var singleIndex = {attribute:attribute};
+	if(isRangeQuery){
+		rangeConfigClone = query.cloneRangeConfig(rangeConfig);
+		singleIndex.rangeconfig = rangeConfigClone;
+	}else{
+		singleIndex.index = index;
+	}
+	var singleIndexList = [singleIndex];
 	if(partitionCrossJoins.length == 0){
 		return getResultSet(cmd, keys, singleIndexList, then);
 	}else{
 		// merge query results in retrieval order
 		var partitionResults = [];
 		var partitionIdx = [];
-		var boundIndex = null;
-		var boundPartition = null;
 		var pcjIndexes = Object.keys(partitionCrossJoins);
 		var mergeData = [];
 		async.each(pcjIndexes, function(idx, callback){
-			if(partitionResults[idx] != null){				// query is not empty
-				return(callback(null));
-			}
 			var pcj = partitionCrossJoins[idx];
 			for(var prop in pcj){
 				indexClone[prop] = pcj[prop];
 			}
-			singleIndexList[0].index = boundIndex || indexClone;		// bootstrap with indexClone
+			// bootstrap with indexClone
+			if(isRangeQuery){
+				rangeConfigClone.index = indexClone;
+			}else{
+				singleIndexList[0].index = indexClone;
+			}
 			getResultSet(cmd, keys, singleIndexList, function(err, result){
 				partitionResults[idx] = (result || []).data;
 				callback(err);
@@ -1280,8 +1309,10 @@ query.singleIndexQuery = function(cmd, key, index, attribute, then){
 				if(utils.startsWith(cmdType, 'count')){
 					mergeData = partitionResults.reduce(function(a,b){return a+b;});
 				}else{	// compare next values across the partitions and pick the least
-					ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
+					var boundIndex = null;
+					var boundPartition = null;
 					var cmdOrder = command.getOrder(cmd);
+					ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
 					for(var i=0; true; i++){
 						if( i == pcjIndexes.length){
 							i = 0;				// reset cycle

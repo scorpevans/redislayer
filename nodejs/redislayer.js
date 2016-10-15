@@ -32,7 +32,7 @@ redislayer = {
 	 * recommended approach to creating multiple configs and keys
 	 * @param	{object}	dtree	see dtree.js for sample
 	 */
-	loadtree: function(arg){
+	loadtree: function loadtree(arg){
 		datatype.loadtree(arg.dtree);
 	},
 	
@@ -42,7 +42,7 @@ redislayer = {
 	 * @param	{object}	index_config
 	 * @return 	{function}	newly created config
 	 */
-	createConfig: function(arg){
+	createConfig: function createConfig(arg){
 		return datatype.createConfig(arg.id, arg.struct, arg.indexconfig);
 	},
 	
@@ -79,23 +79,23 @@ redislayer = {
 	/**
 	 *
 	 */
-	getExcludeCursorLabel: query.getExcludeCursorLabel,
+	rangeConfig: query.rangeConfig,
 
 	/**
 	 *
 	 */
-	singleIndexQuery: function(arg, then){
+	singleIndexQuery: function singleIndexQuery(arg, then){
 	        var cmd = arg.cmd
 	        	, key = arg.key
-	        	, index = arg.index
+	        	, indexorrange = arg.indexorrange
 	        	, attribute = arg.attribute;
-		query.singleIndexQuery(cmd, key, index, attribute, then);
+		query.singleIndexQuery(cmd, key, indexorrange, attribute, then);
 	},
 	
 	/**
 	 *
 	 */
-	indexListQuery: function(arg, then){
+	indexListQuery: function indexListQuery(arg, then){
 	        var cmd = arg.cmd
 	        	, key = arg.key
 	        	, indexList = arg.indexlist;
@@ -107,7 +107,7 @@ redislayer = {
 	/**
 	 *
 	 */
-	createResultsetOrd: function(arg){
+	createResultsetOrd: function createResultsetOrd(arg){
 		return join.createResultsetOrd(arg.id, arg.indexconfig);
 	},
 	
@@ -124,7 +124,7 @@ redislayer = {
 	/**
 	 *
 	 */
-	mergeStreams: function(arg, then){
+	mergeStreams: function mergeStreams(arg, then){
 		join.mergeStreams(arg.joinconfig, then);
 	},
 	
@@ -133,7 +133,7 @@ redislayer = {
 	/**
 	 *
 	 */
-	migrate: function(arg, then){
+	migrate: function migrate(arg, then){
 		var keyOrigin = arg.keyorigin
 	        	, keyDestination = arg.keydestination
 	        	, indexStart = arg.indexstart
