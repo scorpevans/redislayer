@@ -1,47 +1,31 @@
+
+// NB: compliment this examples here with the documentation in redislayer.js
+
 var rl = require('./redislayer');
-var zset = rl.getStruct().zset.getId();
+var dtree = require('./dtree');
+var clist = require('./clist');			// requires redis running on ports 6379 and 6380
 
 
-// 1. create and load a tree to represent your keys and configurations
-// 	This can also be done with createKey and createConfig calls; see redislayer.js
-// this data-tree sample is taken from dtree.js
-// NB: see dtree.js for explanations to the fields and other options
-var dtree = {
-	id:	'datatype',
-	structs:[{
-		id:	zset,
-		configs: [{
-			id:     'zkey_user',
-			index:  { fields: ['gender', 'userid', 'firstname', 'lastname']
-				, fieldprependskey: [null, null, true, true]		// firstname & lastname are now so-called field-branches
-				, offsets: [null, 502, 300, 300]
-				, offsetprependsuid: [false, true, true, true]		// userid=true is crucial; see offsetprependsuid in dtree.js
-				, partitions: [true]
-				, factors: [10000000000000, 1]			
-				, types: ['text', 'integer', 'text', 'text']},
-			keys:	[{
-				id:	'key1',
-				label:	'example:employee:detail'}]}]}],
-};
-
-rl.loadtree({dtree:dtree});		// load dtree into redislayer
+// SETUP
+//rl.loadClusterList({clist:clist});		// already done by dtree
+rl.loadDatatypeTree({dtree:dtree});		// load datatype tree
+rl.setDefaultClusterId(1000);			// set default cluster for this instance of redislayer
 
 
-// 2. start querying your data-layer via redislayer; see redislayer.js for API
-// Note that there's no reference to where/how to fetch/save the data; see dtree.js for configuration
-// 	this means that, in most cases, the storage config can be changed without changing your code
-// 	and migration is just a function call
-
+// QUERYING
+// Note that there's no reference to where/how to fetch/save the data
+// this means that, there's no need to refactor code when storage is changed to equivalent configs
+// and migration is just a function call
 
 // setters
-
+/*
 var key = rl.getKey().key1;
 var cmd = key.getCommand().add;
 var index = {gender: 1, userid: 12300, firstname: 'firstname1', lastname: 'lastname1'};
 var attr = {nx: true};
 var arg = {cmd:cmd, key:key, indexorrange:index, attribute:attr};
 rl.singleIndexQuery(arg, function(err, result){
-	console.log('[1]');
+	console.log('[set index]');
 	if(err || result.code != 0){
 		console.log('Oops! '+err);
 	}else{
@@ -54,7 +38,7 @@ var idx2 = {gender: 1, userid: 12311, firstname: 'firstname3', lastname: 'lastna
 var indexList = [{index:idx1, attribute:attr}, {index:idx2, attribute:attr}];
 var arg = {cmd:cmd, key:key, indexlist:indexList};
 rl.indexListQuery(arg, function(err, result){
-	console.log('[2]');
+	console.log('[set multiple indexes]');
 	if(err || result.code != 0){
 		console.log('Oops! '+err);
 	}else{
@@ -107,7 +91,6 @@ rl.singleIndexQuery(arg, function(err, result){
 	}
 });
 
-
 // TODO
 // rangers
 cmd = key.getCommand().rangeasc;		// range in ascending order
@@ -128,5 +111,5 @@ var arg = {cmd:cmd, key:key, indexlist:indexList};
 //		console.log(result.data);
 //	}
 //});
-
+*/
 

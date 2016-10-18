@@ -1,6 +1,9 @@
 * test
-* refactor
 * allow separate configs per field-branch
 * logging and log-levels
 * include other cluster types
-* consider one-to-many joins, more clauses e.g. grouping, etc
+* refactor
+* one-to-many joins
+...
+* consider validation of fields, defaults, constraints, etc
+* consider advanced sql-like queries

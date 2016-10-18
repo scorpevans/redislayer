@@ -7,15 +7,14 @@ var command = datatype.command;
 
 var join = {};
 
-	// CONFIGURATIONS
-var	access_code = 'join._do_not_access_fields_with_this';
-
-
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 var defaultLimit = query.getDefaultBatchLimit();
 
-unwrap = function unwrap(caller){
+var access_code = 'join._do_not_access_fields_with_this';
+
+
+var unwrap = function unwrap(caller){
         return caller(access_code);
 }
 
@@ -76,11 +75,6 @@ join.getNamespaceCursor = function(namespace, cursor){
 	return cursorClone;
 };
 
-// adhoc Ords for functions which have to participate in a join but lacking .keys prop in their resultset
-join.createResultsetOrd = function createResultsetOrd(id, index_config){
-	var config = datatype.createConfig(id, null, index_config);
-	return datatype.getConfigFieldOrdering(config, null, null);
-};
 
 var joinFieldMask = [];
 var unMaskedFields = {};

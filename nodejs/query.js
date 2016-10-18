@@ -5,10 +5,10 @@ var datatype = require('./datatype');
 var command = datatype.command;
 
 
-var query = {};
+var query = {
 	// CONFIGURATIONS
-var	const_limit_default = 50,				// result limit for performing internal routines
-	label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possible
+	const_limit_default: 50,				// result limit for performing internal routines
+};
 
 
 var separator_key = datatype.getKeySeparator();
@@ -18,9 +18,11 @@ var redisMaxScoreFactor = datatype.getRedisMaxScoreFactor();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 
+var label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possible
+
 
 query.getDefaultBatchLimit = function(){
-	return const_limit_default;
+	return query.const_limit_default;
 };
 
 
@@ -28,9 +30,9 @@ query.rangeConfig = function(index){
 	this.index = index;		// an index representing an object
 	this.startProp = null;		// the prop which should be used to compute the starting point based on the Index
 	this.stopProp = null;		// the prop which should be used to compute the stopping point
-	this.boundValue = null;		// inclusive max/min value for stopProp; else ranging stops when value change from Index's value
+	this.boundValue = null;		// inclusive max/min value for stopProp; if NULL, ranging stops when value change from Index's stopProp value
 	this.excludeCursor = false;	// in case of paging, used to specify if cursor position should be skipped
-	this.cursorMatchOffset = null;	// in case joins, used to specify amount of already returned values which match the cursor position 
+	this.cursorMatchOffset = null;	// in case of joins, used to specify amount of already returned values which match the cursor position 
 	var that = this;
 	this.clone = function cloneRangeConfig(){
 		var rc = new query.rangeConfig(that.index);
@@ -38,7 +40,7 @@ query.rangeConfig = function(index){
 		rc.stopProp = that.stopProp;
 		rc.boundValue = that.boundValue;
 		rc.excludeCursor = that.excludeCursor;
-		rc.offset = that.offset;
+		rc.cursorMatchOffset = that.cursorMatchOffset;
 		return rc;
 	};
 };
@@ -50,7 +52,16 @@ query.cloneRangeConfig = function(rc){
 	return rc.clone();
 };
 
-
+processPaddingForZsetUID = function processPaddingForZsetUID(struct, type, val){
+	if(val != null){
+		if(struct == 'zset' && (type == 'float' || type == 'integer')){
+			val = Array((Math.floor(val)+'').length).join('a') + val;	// e.g. 13.82 -> a13.82
+		}else{
+			val = ''+val;
+		}
+	}
+	return val;
+}
 parseIndexToStorageAttributes = function(key, cmd, index){
 	// for <xid>, distinguish between 0 and null for zrangebyscore
 	// that is xid=null would be a hint that zrangebylex should be used instead
@@ -109,14 +120,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 			// in case of <null> use empty-string concats in order to prevent order mismatches
 			// for zset, prefix floats with 'a's so they maintain their sorting; see datatype.getConfigOrdering
 			var mytype = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
-			var pad = '';
-			if(splits[1] != null){
-				if(struct == 'zset' && (mytype == 'float' || mytype == 'integer')){
-					pad = Array((Math.floor(splits[1])+'').length).join('a') + splits[1];	// e.g. 13.82 -> a13.82
-				}else{
-					pad = ''+splits[1];
-				}
-			}
+			var pad = processPaddingForZsetUID(struct, mytype, splits[1]) || '';
 			uidPrefixes[type][fieldIndex] = pad;
 		}
 		if(struct == 'zset'){
@@ -142,6 +146,7 @@ parseIndexToStorageAttributes = function(key, cmd, index){
 		// NB: upsert can NOT cause changes in key/keysuffix
 		// since keySuffixes+UID are required to be complete in order to identify target
 		// => in case upsert is tried on such fields, only the non-keysuffix portion is updated
+		//	as it turns out, this prevents offsetgroups from updating keysuffixes which subsumes their contribution
 		if(utils.startsWith(command.getType(cmd), 'upsert')){
 			if(struct == 'zset'){
 				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
@@ -258,17 +263,6 @@ removePaddingFromZsetUID = function(val){
 		val = null;
 	}
 	return val;
-};
-removeSubsequenceDuplicates = function(ll){
-	var len = (ll || []).length;
-	var uniq = [];
-	for(var i=0; i < len; i++){
-		var lastUniq = uniq[uniq.length-1];
-		if(lastUniq == null || (ll[i] != null && ll[i] > lastUniq)){
-			uniq.push(ll[i]);
-		}
-	}
-	return uniq;
 };
 parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 	// NB: if <xid> is null, <uid> still has to be parsed
@@ -403,13 +397,18 @@ parseStorageAttributesToIndex = function(key, key_text, xid, uid){
 				if(offsetGroupIndex != null){
 					isOffsetGroup = true;
 					var offsetGroups = datatype.getConfigIndexProp(keyConfig, 'offsetgroups');
-					keySuffixOffsets = removeSubsequenceDuplicates(offsetGroups);
+					keySuffixOffsets = offsetGroups;
 				}else{
 					offsetGroupIndex = fieldIndex;
 				}
 				// count keysuffix offset
 				for(var h=keySuffixOffsets.length-1; h > offsetGroupIndex; h--){
 					var idx = (isOffsetGroup ? keySuffixOffsets[h] : h);
+					if(idx != h){
+						// this eliminates unsorted duplicates in offsetgroups
+						// e.g. [3,2,2,3,3] --> [skip,skip,2,3,skip] i.e. sorted and unique just like offsets
+						continue;
+					}
 					if(datatype.isConfigFieldKeySuffix(keyConfig, idx)){
 						// do not count more than a single fieldBranch
 						// since fieldBranches are stored separately
@@ -565,7 +564,10 @@ getKeyRangeStopMember = function(range_order, key, range_config, member){
 		var tray = member.split(separator_detail).splice(0, offsets);
 		// NB: boundValue not used in getKeyRangeStartMember since index can be used to represent that
 		// NB: in case of a boundValue argument, we have to deal with a string instead of char
-		var stop = range_config.boundValue;
+		// NB: UID numerics are padded to maintain ordering
+		var struct = datatype.getConfigStructId(keyConfig);
+		var type = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', stopPropIndex);
+		var stop = processPaddingForZsetUID( struct, type, range_config.boundValue);
 		if(stop != null){
 			tray[tray.length-1] = String(stop);
 		}
@@ -594,11 +596,11 @@ getKeyRangeStopMember = function(range_order, key, range_config, member){
 
 
 // decide here which cluster_instance should be queried
-getQueryDBInstance = function(cmd, keys, index, key_field){
+getQueryDBInstance = function(meta_cmd, keys, index, key_field){
 	var key = keys[0];
 	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
 	var keyFieldSuffixIndex = datatype.getKeyFieldSuffixIndex(key, key_field, index);
-	var arg = {cmd:cmd, key:keys, keysuffixindex:keyFieldSuffixIndex, keyfield:key_field};
+	var arg = {metacmd:meta_cmd, key:keys, keysuffixindex:keyFieldSuffixIndex, keyfield:key_field};
 	return instanceDecisionFunction.apply(this, [arg]);
 };
 
@@ -697,7 +699,7 @@ queryDBInstance = function(cluster_instance, cmd, keys, key_type, key_field, key
 				keyTexts.push((keyLabels.concat(keyFieldArray).concat(myKeySuffixes || [])).join(separator_key));
 			}
 			var queryArgs = keyTexts.concat(prefixes, myArgs, suffixes);
-			cluster_instance.val[keyCommand](queryArgs, function(err, output){
+			cluster_instance.getProxy()[keyCommand](queryArgs, function(err, output){
 				var errorMessage = 'FATAL: query.queryDB: args: '+keyCommand+'->'+queryArgs;
 				if(!utils.logError(err, errorMessage)){
 					if(!command.isOverRange(cmd)){

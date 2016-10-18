@@ -6,15 +6,13 @@ var utils = require('./utils');
 var	separator_key = ':',								// separator for parts of keys
 	separator_detail = '\u0000',							// separator for parts of values i.e. UID and XID
 	collision_breaker = '\u0000?*$#\u0000\u0000?#-*',				// appending this to a UID guarantees it doesn't collide with another
-	offset_id_prefix_info = 6,
 	redis_max_score_factor = Math.pow(10,15),
 	asc = '_label_ascending',							// direction of ranging -- typically over sorted-sets
 	desc = '_label_descending',							// direction of ranging -- typically over sorted-sets
 	access_code = 'datatype._do_not_access_fields_with_this',			// used to lock internal-configs or leaf nodes of dicts see utils.wrap
 	label_cluster_instance_getter = '_cluster_instance_function',
-	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){return cluster.getDefaultInstance();}),
-	label_comparator = '_comparator',
-	label_comparator_prop = '_comparator_prop',
+	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){
+					return cluster.getDefault().master;}),
 	// functions relating to configs with key-suffixes
 	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	label_field_min_value_getter = '_field_min_value_getter_function',		// {field1: function1,..}; see default_get_field_min_value
@@ -35,7 +33,7 @@ var	separator_key = ':',								// separator for parts of keys
 
 
 
-var unwrap = function unwrap(caller){
+var unwrap = function datatypeUnwrap(caller){
 	return caller(access_code);
 };
 
@@ -265,13 +263,6 @@ datatype.setFieldMaxValueGetter(default_get_field_max_value);
 datatype.setFieldNextChainGetter(default_get_next_chain);
 datatype.setFieldPreviousChainGetter(default_get_previous_chain);
 
-datatype.getIdPrefixInfoOffset = function(offset){
-	return offset_id_prefix_info;
-};
-
-datatype.setIdPrefixInfoOffset = function(offset){
-	offset_id_prefix_info = offset;
-};
 
 datatype.getKeySeparator = function(){
 	return separator_key;
@@ -283,10 +274,6 @@ datatype.getDetailSeparator = function(){
 
 datatype.getCollisionBreaker = function(){
 	return collision_breaker;
-};
-
-datatype.getIdIncrement = function(){
-	return Math.pow(10, offset_id_prefix_info);
 };
 
 datatype.getRedisMaxScoreFactor = function(){
@@ -322,9 +309,9 @@ getFieldOrdering = function(joint_map, joints){
 };
 
 datatype.createConfig = function(id, struct, index_config){
-	// allow struct to take nulls, in which case the config is not bound to singleton datatype structure
+	// allow struct to take nulls, in which case the config is not bound to the singleton datatype structure
 	// join.js makes use of such a hack
-	// in order to close the loop to a struct, the respective function can be define manually on the created config
+	// in order to link to a struct, the respective function can be defined manually on the created config
 	var structConfig = (struct != null ? struct.getConfig() : {});
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
@@ -361,7 +348,7 @@ datatype.createKey = function(id, label, key_config){
 
 
 // TODO add checkers to e.g. inform user of malformed configurations, etc
-datatype.loadtree = function(dtree){
+datatype.loadTree = function(dtree){
 	var fldGetter = {'clusterinstance': 'setClusterInstanceGetter',
 			'minvalue': 'setFieldMinValueGetter',
 			'maxvalue': 'setFieldMaxValueGetter',
@@ -399,13 +386,13 @@ datatype.loadtree = function(dtree){
 			var cfg = configs[j];
 			var cfgObj = datatype.createConfig(cfg.id, strObj, cfg.index);
 			var keys = cfg.keys;
-			var fieldGetter = cfg.fieldgetter || {};
+			var configGetter = cfg.configgetter || {};
 			var fieldList = datatype.getConfigIndexProp(cfgObj, 'fields');
 			for(var fld in fldGetter){
 				if(fld == 'clusterinstance'){
 					cfgObj[fldGetter[fld]](getter);
 				}else{
-					var getterList = fieldGetter[fld] || [];
+					var getterList = configGetter[fld] || [];
 					for(var k=0; k < fieldList.length; k++){
 						var getter = getterList[k];
 						if(getter != null){
@@ -555,7 +542,7 @@ datatype.getZRangeSuffix = function(config, index, args, xid, uid){
 };
 
 splitID = function (id, offset){
-	id = (id != null ? String(id) : id); 
+	id = (id != null ? String(id) : id); 		// !!0 != !!'0'
 	if(offset == null){				// index property not included in key
 		return [null, id];
 	}else if(offset == 0){				// full index property is included only in key
@@ -587,7 +574,7 @@ datatype.splitConfigFieldValue = function(config, index, field){
 			if(offsetgroups[fieldIndex] >= 0){
 				var fields = datatype.getConfigIndexProp(config, 'fields');
 				// get a non-null offsetgroup-field as [val]
-				// also get the corresponding [offset]; offsetgroups may have different offset regions
+				// also get the corresponding [offset]; some offsetgroup members subsume others
 				for(var i=0; i < offsetgroups.length; i++){
 					var fldIdx = offsetgroups[i];
 					if(fldIdx == offsetgroups[fieldIndex]){
@@ -606,8 +593,13 @@ datatype.splitConfigFieldValue = function(config, index, field){
 		var prefixInfo = (prefixOffset == null || prefixOffset < 0 ? split[0] : null);
 		var trailInfo = (prefixOffset == null || prefixOffset < 0 ? null : split[1]);
 		var stem = (prefixOffset == null || prefixOffset < 0 ? split[1] : split[0]) || null;	// ||<null> since '' is not yet for key-suffixing
-		offset = (offset != null ? Math.abs(Math.floor(offset/100)) : offset);			// how much of value to retain
-		split = splitID(stem, offset);
+		var os = (offset != null ? Math.abs(Math.floor(offset/100)) : offset);			// how much of value to retain
+		if(os == 0 && offset != 0){
+			// this 0 is actually the absence of a specified value
+			// if offset was not 0 in the first-place, then this means keep everything
+			os = null;
+		}
+		split = splitID(stem, os);
 		split[0] = (split[0] != null || trailInfo != null || prefixInfo != null ?
 				(prefixInfo||'') + (split[0]||'') + (trailInfo||'') : null);
 		if(val != index[field]){
@@ -624,13 +616,30 @@ datatype.splitConfigFieldValue = function(config, index, field){
 };
 
 datatype.unsplitFieldValue = function(split, offset){
-	if(offset > 0){
-		return (split[0]||'')+(split[1]||'');
-	}else{
-		offset = -1 * offset;
+	// some keysuffixes subsume keysuffixes of some members of the offsetgroups
+	// so it must be determined whether both Info and main-offset parts are both applicable
+	// i.e. both offset%100 and offset/100 parts have to be considered
+	if(offset == 0){
+		return split.join('');
+	}
+	offset = -1 * offset;
+	var isMultiSplit = (offset != null && (offset == 0 || Math.floor(offset/100) != 0));
+	if(offset < 0){
+		var prefixOffset = (offset == null || offset == -Infinity ? offset : offset%100);
+		var innerSplit = splitID(split[0], prefixOffset);
+		var prefixInfo = (innerSplit[0] != null ? innerSplit[0] : '');
+		var stemSplit = '';
+		if(isMultiSplit){
+			stemSplit = (innerSplit[1] != null ? innerSplit[1] : '');
+		}
+		return (prefixInfo+stemSplit+(split[1] != null ? split[1] : ''));
+	}else if(offset > 0){
 		var trailOffset = (offset == null || offset == Infinity ? offset : offset%100);
 		var innerSplit = splitID(split[0], trailOffset);
-		var stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
+		var stemSplit = '';
+		if(isMultiSplit){
+			stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
+		}
 		var trailInfo = (innerSplit[1] != null ? innerSplit[1] : '');
 		return (stemSplit+(split[1] != null ? split[1] : '')+trailInfo);
 	}
@@ -658,6 +667,7 @@ datatype.getConfigFieldPrefactor = function(config, field_idx){
 	return preFactor;
 };
 
+var label_comparator_prop = '_comparator_prop';
 datatype.jointMap = function(){
 	var jm = {};
 	var myjm = function(key){return (key == access_code ? jm : null);};
@@ -683,6 +693,10 @@ datatype.addJointMapMask = function(joint_map, prop, prop_map){
 	jm[prop][label_comparator_prop] = prop_map;
 };
 
+// TODO this actually only indirectly related to Joins
+//	it seems more like datatype.configFieldOrd
+//	then, getConfigFieldOrdering seems not to need joints and joint_map arguments
+//	then, it seems datatype.jointMap belongs to join.js
 datatype.jointOrd = function(){
 	// keytext, score & uid hold props from joints
 	// fieldconfig:{fmap1:{config:#, field:#}, fmap2:{..}, ..}
@@ -699,6 +713,7 @@ datatype.jointOrd = function(){
 		ord.mask[prop].config = config;
 		ord.mask[prop].field = field;
 	};
+	// TODO deprecate
 	myord.addMaskFromClone = function(prop, mask){
 		var pm = ord.mask[mask] || {};
 		var field = pm.field,
@@ -783,7 +798,6 @@ datatype.normalizeOrd = function(ord){
 	so once again to improved ordering matches regardless on where values are stored, floats should be padded whenever they are placed in UIDs
 	the float '123.321' should be stored as 'aa123.321'; the 'a' padding per tenth degree reinstates the float ordering
 */
-// joint_map => {f:{label_comparator_prop: fmap},...}
 datatype.getConfigFieldOrdering = function(config, joint_map, joints){
 	var ord = new datatype.jointOrd();
 	// convert encoding to [fieldIdx, cmp_field] pairs
@@ -1011,7 +1025,8 @@ command.getRangeMode = function(cmd){
 // command which run over a certain range
 command.isOverRange = function(cmd){
 	var cmdType = command.getType(cmd);
-	return (cmdType.slice(-1) == 'z' && (utils.startsWith(cmdType, 'range') || utils.startsWith(cmdType, 'count')));
+	return (cmdType.slice(-1) == 'z' && (utils.startsWith(cmdType, 'range')
+						|| utils.startsWith(cmdType, 'count') || utils.startsWith(cmdType, 'delrange')));
 };
 
 var xidCommandPrefixes = ['add', 'incrby', 'decrby', 'upsert', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
