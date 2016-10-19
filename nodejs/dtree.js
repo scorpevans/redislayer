@@ -44,7 +44,7 @@ rl.loadClusterList({clist:clist});
 
 // this dtree is designed to demonstrate all the juicy aspects of configuring storages
 // NB see example.js for a demo using this dtree
-var idPrefixInfoOffset = 4;
+var idPrefixInfoOffset = 3;
 var dtree = {
 	id:	null,	// whatever
 	defaultgetter:	{
@@ -62,7 +62,7 @@ var dtree = {
 		 * @param	{object}	arg.keyfield - possible field-branch; see fieldprependskey
 		 * @return	{object}	the cluster-instance on which to perform a query
 		 */
-		clusterinstance: function(arg){return rl.getDefaultCluster().getProxy().master;},
+		clusterinstance: function(arg){return rl.getDefaultCluster().master;},
 		/**
 		 * provide a function returning minimum bound to help terminate iterating across key-chains; see offsets
 		 * such a function could infer this by e.g. querying the minimum values of fields
@@ -144,7 +144,7 @@ var dtree = {
 				 * 	hence it's not advisable to offset fields which change frequently
 				 *	since updating requires knowledge of the existing value, then a delete, followed by an insert
 				 */
-				offsets: [null, 500+idPrefixInfoOffset, 500+idPrefixInfoOffset],
+				offsets: [null, 500+idPrefixInfoOffset, idPrefixInfoOffset],
 				/**
 				 * if the design is such that several fields would produce the same keysuffix,
 				 * designate the index of only one of them to take care of this; instead of repeating the same suffix in the key
@@ -153,7 +153,7 @@ var dtree = {
 				 *	in case keysuffixing is made, the key can be made out in both commands only if there are offsetgroups
 				 *	between the Member and Score i.e. the keysuffix can be picked from either the Member or Score
 				 */
-				offsetgroups: [null, 1, 1],
+				offsetgroups: [null, 1, 1],			// entityid's key-suffix subsumes that of memberid
 				/**
 				 * specify whether the value (possibly offsetted) should contribute towards the <unique field> stored
 				 * this prop composes the unique-id (UID) of a given object
@@ -190,8 +190,8 @@ var dtree = {
 				previouschain: [],
 			},
 			keys:	[{
-				id:	'zkey_membership',		// id reference to this key
-				label:	'entity:members',		// the name of the key within the database
+				id:	'zkey_membership',				// id reference to this key
+				label:	'redislayer:example:entity:members',		// the name of the key within the database
 				// inner definitions of getters take precedence over outer ones
 				keygetter: {
 					clusterinstance: null,
@@ -207,24 +207,23 @@ var dtree = {
 		configs:[{
 			id:	'hash_entitydetails',
 			index:	{
-				fields: ['entityid', 'firstnames', 'lastnames', 'comments'],
+				fields: ['entityid', 'firstnames', 'lastnames', 'comment'],
 				fieldprependskey: [null, true, true, true],	// 3 field-branches
-				offsets: [500+idPrefixInfoOffset, idPrefixInfoOffset, idPrefixInfoOffset, idPrefixInfoOffset],
-				offsetgroups: [0, 0, 0, 0],			// entityid's key-suffix subsumes those of the other fields
+				offsets: [500+idPrefixInfoOffset],
 				offsetprependsuid: [true],
 				types:	['integer', 'text', 'text', 'text']
 			},
 			keys:	[{
-				id:'hkey_groups',
-				label:'group:detail',
+				id:'hkey_group',
+				label:'redislayer:example:group:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['1000'].getProxy().master;},
+					clusterinstance: function(arg){return rl.getClusterList()['1000'].master;},
 				}
 				},{
 				id:'hkey_user',
-				label:'user:detail',
+				label:'redislayer:example:user:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['2000'].getProxy().master;},
+					clusterinstance: function(arg){return rl.getClusterList()['2000'].master;},
 				}
 			}]
 			},{
@@ -234,21 +233,21 @@ var dtree = {
 				offsetprependsuid: [true],
 				types:	['text', 'integer'],
 			},
-			keys:	[{id:'hkey_entityid', label:'entity:id'}],
+			keys:	[{id:'hkey_entityid', label:'redislayer:example:entity:id'}],
 		}]
 		},{
 		id:	string,	// redis string struct
 		configs:[{
-			id:	'string_entityid',
+			id:	'string_userid',
 			index:	{
 				fields:	['increment'],
 				types:	['integer'],
 			},
 			keys:	[{
 				id:'skey_userid',
-				label:'user:id',
+				label:'redislayer:example:user:id',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['2000'].getProxy().master;},
+					clusterinstance: function(arg){return rl.getClusterList()['2000'].master;},
 				}
 			}],
 		}]

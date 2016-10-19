@@ -1,4 +1,4 @@
-A redis-inspired query engine for interacting transparently with your heterogeneous data layer.
+A redis-inspired query adapter for interacting transparently with your heterogeneous data layer.
 
 ## Motivation - transparency atop heterogeneity
 1. storage :- use a standard configuration to define how and where to store/retrieve data objects on heterogeneous databases

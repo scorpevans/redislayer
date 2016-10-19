@@ -195,6 +195,74 @@ join.mergeStreams = function mergeStreams(join_config, then){
 			streamConfigs[idx].func.apply(this, streamProps[idx].argsCopy);
 		}, function(err){
 			if(!utils.logError(err, 'join.mergeStreams')){
+				// set up a new joint-Ord, if not done already
+				// requires that provided functions return results with keys or Ords
+				// NB: in case of mangling for the config prop of ord, be sure to update the respective joint_map
+				if(ord == null){
+					var ords = [];
+					for(var j=0; j < streamProps.length; j++){
+						var myord = streamProps[j].ord;
+						var namespace = streamConfigs[j].namespace;
+						if(streamConfigs[j].jointMap == null){
+							streamConfigs[j].jointMap = new datatype.jointMap();
+						}
+						var joint_map = streamConfigs[j].jointMap;
+						var fields = Object.keys(datatype.getJointOrdProp(myord, 'mask') || {});
+						var config = null;
+						if(myord == null){
+							var key = streamProps[j].key;
+							if(key == null){
+								var func = streamConfigs[j].func.name || '';
+								var err = 'no [ord] or [key] was returned by '+func+'(stream['+j+'])';
+								return then(err);
+							}
+							config = datatype.getKeyConfig(key);
+							try{
+								myord = datatype.getConfigFieldOrdering(config, joint_map, joints);
+							}catch(error){
+								return then(error);
+							}
+							datatype.resetJointOrdMask(myord);	// these are possibly only partial fields
+							fields = datatype.getConfigIndexProp(config, 'fields');
+						}
+						ords.push(myord);
+						// merge ords into a single ord
+						// all ords are equivalent except for the fieldconfig props, which have to be merged
+						// initialize ord to that of the first entry
+						mergeOrds(ord, j, myord, fields, config, namespace, joint_map, joints);
+						if(j == 0){
+							ord = ords[0];
+						}else{	// check that ords of all streamConfigs are in harmony
+							var prevOrd = ords[j-1];
+							var k1 = datatype.getJointOrdProp(myord, 'keytext');
+							var s1 = datatype.getJointOrdProp(myord, 'score');
+							var u1 = datatype.getJointOrdProp(myord, 'uid');
+							var k2 = datatype.getJointOrdProp(prevOrd, 'keytext');
+							var s2 = datatype.getJointOrdProp(prevOrd, 'score');
+							var u2 = datatype.getJointOrdProp(prevOrd, 'uid');
+							var isCongruent = (k1.length == k2.length && s1.length == s2.length && u1.length == u2.length);
+							for(var k=0; isCongruent && k < k1.length; k++){
+								if(k1[k][0] != k2[k][0] || k1[k][1] != k2[k][1]){
+									isCongruent = false;
+								}
+							}
+							for(var k=0; isCongruent && k < s1.length; k++){
+								if(s1[k][0] != s2[k][0] || s1[k][1] != s2[k][1]){
+									isCongruent = false;
+								}
+							}
+							for(var k=0; isCongruent && k < u1.length; k++){
+								if(u1[k][0] != u2[k][0] || u1[k][1] != u2[k][1]){
+									isCongruent = false;
+								}
+							}
+							if(!isCongruent){
+								var err = 'the streams '+(j-1)+' and '+j+' do not have the same ordering';
+								return then(err);
+							}
+						}
+					}
+				}
 				// if the re-fetch doesn't progress the cursor we're not going to terminate
 				if(refreshIdx != null){
 					var str = streamIndexes[refreshIdx];
@@ -292,69 +360,6 @@ join.mergeStreams = function mergeStreams(join_config, then){
 						}
 					}
 					var index = streamProps[str].results[idx];
-					// set up a new joint-Ord, if not done already
-					// requires that provided functions return results with keys or Ords
-					// NB: in case of mangling for the config prop of ord, be sure to update the respective joint_map
-					if(ord == null){
-						var ords = [];
-						for(var j=0; j < streamProps.length; j++){
-							var myord = streamProps[j].ord;
-							var namespace = streamConfigs[j].namespace;
-							if(streamConfigs[j].jointMap == null){
-								streamConfigs[j].jointMap = new datatype.jointMap();
-							}
-							var joint_map = streamConfigs[j].jointMap;
-							var fields = Object.keys(datatype.getJointOrdProp(myord, 'mask') || {});
-							var config = null;
-							if(myord == null){
-								var key = streamProps[j].key;
-								config = datatype.getKeyConfig(key);
-								try{
-									myord = datatype.getConfigFieldOrdering(config, joint_map, joints);
-								}catch(error){
-									return then(error);
-								}
-								datatype.resetJointOrdMask(myord);			// these are possibly only partial fields
-								fields = datatype.getConfigIndexProp(config, 'fields');
-							}
-							ords.push(myord);
-							// merge ords into a single ord
-							// all ords are equivalent except for the fieldconfig props, which have to be merged
-							// initialize ord to that of the first entry
-							mergeOrds(ord, j, myord, fields, config, namespace, joint_map, joints);
-							if(j == 0){
-								ord = ords[0];
-							}else{	// check that ords of all streamConfigs are in harmony
-								var prevOrd = ords[j-1];
-								var k1 = datatype.getJointOrdProp(myord, 'keytext');
-								var s1 = datatype.getJointOrdProp(myord, 'score');
-								var u1 = datatype.getJointOrdProp(myord, 'uid');
-								var k2 = datatype.getJointOrdProp(prevOrd, 'keytext');
-								var s2 = datatype.getJointOrdProp(prevOrd, 'score');
-								var u2 = datatype.getJointOrdProp(prevOrd, 'uid');
-								var isCongruent = (k1.length == k2.length && s1.length == s2.length && u1.length == u2.length);
-								for(var k=0; isCongruent && k < k1.length; k++){
-									if(k1[k][0] != k2[k][0] || k1[k][1] != k2[k][1]){
-										isCongruent = false;
-									}
-								}
-								for(var k=0; isCongruent && k < s1.length; k++){
-									if(s1[k][0] != s2[k][0] || s1[k][1] != s2[k][1]){
-										isCongruent = false;
-									}
-								}
-								for(var k=0; isCongruent && k < u1.length; k++){
-									if(u1[k][0] != u2[k][0] || u1[k][1] != u2[k][1]){
-										isCongruent = false;
-									}
-								}
-								if(!isCongruent){
-									var err = 'join.mergeStreams: the streams '+(j-1)+' and '+j+' do not have the same ordering';
-									return then(err);
-								}
-							}
-						}
-					}
 					var indexData = {};
 					var boundData = {};
 					indexJM = streamConfigs[str].jointMap;

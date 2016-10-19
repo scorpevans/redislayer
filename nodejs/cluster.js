@@ -75,7 +75,7 @@ cluster.loadList = function loadClusterList(clist){
 			myInstance[r].getLabel = getLabel;
 		}
 		if(myInstance != {}){
-			clusterList[clist[i].id] = myInstance;
+			clusterList[id] = myInstance;
 		}
 	}
 };

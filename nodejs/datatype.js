@@ -69,6 +69,7 @@ var structure = {
 					// TODO [type] property should be an array of tags?? affords non-linear dimensions
 					add: {type:'adds', val:'sadd', multi: true},
 					del: {type:'dels', val:'srem', multi: true},
+					randmember: {type:'randmembers', val:'srandmember'},
 					count: {type:'counts', val: 'count',
 						mode: [{
 							bylex: {type: 'countbylexs', val: 'sismember'},
@@ -308,18 +309,17 @@ getFieldOrdering = function(joint_map, joints){
 	return datatype.getConfigFieldOrdering(this, joint_map, joints);
 };
 
-datatype.createConfig = function(id, struct, index_config){
-	// allow struct to take nulls, in which case the config is not bound to the singleton datatype structure
-	// join.js makes use of such a hack
-	// in order to link to a struct, the respective function can be defined manually on the created config
-	var structConfig = (struct != null ? struct.getConfig() : {});
+datatype.createConfig = function(id, struct, index_config, on_tree){
+	var structConfig = (on_tree == false || struct == null ? {} : struct.getConfig());
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
 	dict[id] = {key:[{}], indexconfig: index_config};
 	dict[access_code] = {_all: kcf.concat(['getIndexConfig', 'getFieldIdx', 'getPropFieldIdxValue'
 						, 'getClusterInstanceGetter', 'setClusterInstanceGetter', 'getFieldOrdering'])};
 	var api = utils.wrap(dict, store, access_code, 'config', 'struct', struct, true);
-	if(struct){
+	if(on_tree == false){
+		api[id].getStruct = function(){return struct;};
+	}else{
 		dataConfig[id] = api[id];
 	}
 	return api[id];
@@ -332,15 +332,17 @@ getCommand = function(){	// shortcut
 	return this.getConfig().getStruct().getCommand();
 };
 
-datatype.createKey = function(id, label, key_config){
+datatype.createKey = function(id, label, key_config, on_tree){
 	// allow struct to take nulls, in which case the Key is not bound to singleton datatype structure
-	var configKey = (key_config != null ? key_config.getKey() : {});
+	var configKey = (on_tree == false || key_config == null ? {} : key_config.getKey());
 	var store = {api:configKey, keyconfig:{}, keywrap:{}};
 	var dict = {};
 	dict[id] = {label: label};
 	dict[access_code] = {_all: kcf.concat(['getLabel', 'getCommand', 'getClusterInstanceGetter', 'setClusterInstanceGetter'])};
 	api = utils.wrap(dict, store, access_code, 'key', 'config', key_config, true);
-	if(key_config){
+	if(on_tree == false){
+		api[id].getConfig = function(){return key_config;};
+	}else{
 		dataKey[id] = api[id];
 	}
 	return api[id];
@@ -384,7 +386,7 @@ datatype.loadTree = function(dtree){
 		}
 		for(var j=0; j < configs.length; j++){
 			var cfg = configs[j];
-			var cfgObj = datatype.createConfig(cfg.id, strObj, cfg.index);
+			var cfgObj = datatype.createConfig(cfg.id, strObj, cfg.index, true);
 			var keys = cfg.keys;
 			var configGetter = cfg.configgetter || {};
 			var fieldList = datatype.getConfigIndexProp(cfgObj, 'fields');
@@ -403,7 +405,7 @@ datatype.loadTree = function(dtree){
 			}
 			for(var k=0; k < keys.length; k++){
 				var key = keys[k];
-				var keyObj = datatype.createKey(key.id, key.label, cfgObj);
+				var keyObj = datatype.createKey(key.id, key.label, cfgObj, true);
 				var keyGetter = key.keygetter || {};
 				for(var fld in fldGetter){
 					if(fld == 'clusterinstance'){
@@ -1022,6 +1024,8 @@ command.getRangeMode = function(cmd){
 	}
 };
 
+// TODO consider appending such flags directly to the command dict; especially command.requiresXID and command.requiresUID
+
 // command which run over a certain range
 command.isOverRange = function(cmd){
 	var cmdType = command.getType(cmd);
@@ -1029,9 +1033,12 @@ command.isOverRange = function(cmd){
 						|| utils.startsWith(cmdType, 'count') || utils.startsWith(cmdType, 'delrange')));
 };
 
-var xidCommandPrefixes = ['add', 'incrby', 'decrby', 'upsert', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
+var xidCommandPrefixes = ['add', 'incrby', 'decrby', 'upsert', 'randmember', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
 command.requiresXID = function(cmd){
 	var cmdType = command.getType(cmd);
+	if(cmdType == 'adds'){
+		return false;
+	}
 	for(var i=0; i < xidCommandPrefixes.length; i++){
 		var prefix = xidCommandPrefixes[i];
 		if(utils.startsWith(cmdType, prefix)){
@@ -1106,6 +1113,7 @@ datatype.getKeyFieldSuffixIndex = function(key, field, index){
 command.isMulti = function(cmd){
 	return cmd.isMulti();
 };
+
 
 datatype.command = command;
 

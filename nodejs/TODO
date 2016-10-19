@@ -1,6 +1,7 @@
 * test
 * allow separate configs per field-branch
 * logging and log-levels
+* buildConfigLookup(config): change most of the functions to lookups, by examining configs onload
 * include other cluster types
 * refactor
 * one-to-many joins

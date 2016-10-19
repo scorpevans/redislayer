@@ -99,19 +99,24 @@ Key objects also have a command-set depending on the Struct under which they are
 	 * @param	{string}	arg.id - unique identifier
 	 * @param	{function}	arg.struct - struct; select one from getStruct()
 	 * @param	{object}	arg.indexconfig - index_config; see dtree.js for sample
+	 * @param	{boolean}	arg.ontree - specify if the config should be loaded into Redislayer
 	 * @return 	{function}	newly created config
 	 */
 	createConfig: function createConfig(arg){
-		return datatype.createConfig(arg.id, arg.struct, arg.indexconfig);
+		return datatype.createConfig(arg.id, arg.struct, arg.indexconfig, arg.ontree);
 	},
 	
 	/**
-	 * @param 	{string}	unique identifier
-	 * @param 	{string}	a label which would be used as the table/key name
-	 * @param 	{function}	key_config; select one from getConfig() or createConfig()
+	 * @param 	{object}	arg - a dict
+	 * @param 	{string}	arg.id - unique identifier
+	 * @param 	{string}	arg.label - a label which would be used as the table/key name
+	 * @param 	{function}	arg.config - select one from getConfig() or createConfig()
+	 * @param	{boolean}	arg.ontree - specify if the key should be loaded into Redislayer
 	 * @return 	{function}	newly created key
 	 */
-	createKey: datatype.createKey,
+	createKey: function createKey(arg){
+		return datatype.createKey(arg.id, arg.label, arg.config, arg.ontree)
+	},
 	
 	// configuration getters/setters; see datatype.js
 	// reasonable defaults have been set for all of these
@@ -159,11 +164,7 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	singleIndexQuery: function singleIndexQuery(arg, then){
-	        var cmd = arg.cmd
-	        	, key = arg.key
-	        	, indexorrange = arg.indexorrange
-	        	, attribute = arg.attribute;
-		query.singleIndexQuery(cmd, key, indexorrange, attribute, then);
+		query.singleIndexQuery(arg.cmd, arg.key, arg.indexorrange, arg.attribute, then);
 	},
 	
 	/**
@@ -177,10 +178,7 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	indexListQuery: function indexListQuery(arg, then){
-	        var cmd = arg.cmd
-	        	, key = arg.key
-	        	, indexList = arg.indexlist;
-		query.indexListQuery(cmd, key, indexList, then);
+		query.indexListQuery(arg.cmd, arg.key, arg.indexlist, then);
 	},
 	
 /* JOIN
@@ -254,13 +252,7 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @todo
 	 */
 	migrate: function migrate(arg, then){
-		var keyOrigin = arg.keyorigin
-	        	, keyDestination = arg.keydestination
-	        	, indexStart = arg.indexstart
-	        	, indexEnd = arg.indexend
-	        	, batchSize = arg.batchsize
-	        	, napDuration = arg.napduration;
-		migrate(keyOrigin, keyDestination, indexStart, indexEnd, batchSize, napDuration, then);
+		migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
 	},
 
 	/*
