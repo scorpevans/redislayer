@@ -164,7 +164,11 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	singleIndexQuery: function singleIndexQuery(arg, then){
-		query.singleIndexQuery(arg.cmd, arg.key, arg.indexorrange, arg.attribute, then);
+		try{
+			query.singleIndexQuery(arg.cmd, arg.key, arg.indexorrange, arg.attribute, then);
+		}catch(error){
+			then(error);
+		}
 	},
 	
 	/**
@@ -178,7 +182,11 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	indexListQuery: function indexListQuery(arg, then){
-		query.indexListQuery(arg.cmd, arg.key, arg.indexlist, then);
+		try{
+			query.indexListQuery(arg.cmd, arg.key, arg.indexlist, then);
+		}catch(error){
+			then(error);
+		}
 	},
 	
 /* JOIN
@@ -243,7 +251,11 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	mergeStreams: function mergeStreams(arg, then){
-		join.mergeStreams(arg.joinconfig, then);
+		try{
+			join.mergeStreams(arg.joinconfig, then);
+		}catch(error){
+			then(error);
+		}
 	},
 	
 // MIGRATE
@@ -252,7 +264,11 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @todo
 	 */
 	migrate: function migrate(arg, then){
-		migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
+		try{
+			migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
+		}catch(error){
+			then(error);
+		}
 	},
 
 	/*

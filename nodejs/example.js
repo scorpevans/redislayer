@@ -45,7 +45,7 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 	async.each(entity_list, function(entityIndex, callback){
 		rl.singleIndexQuery(id_arg, function(err, result){
 			if(err || result.code != 0){
-				console.log('Oops! '+err);
+				err = '1: '+err;
 				callback(err);
 			}else{
 				var entityId = '999'+result.data;	// '999' is the 3-digit idPrefixInfo specified in dtree.js
@@ -58,7 +58,7 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 				entity_arg.indexorrange = entityIndex;
 				rl.singleIndexQuery(entity_arg, function(err, result){
 					if(err || result.code != 0){
-						console.log('Oops! '+err);
+						err = '2: '+err;
 						callback(err)
 					}else{	// stow the ID into a redis-set; would be used for creating membership
 						var key = (entity_type == 'users' ? myUserSetKey : myGroupSetKey);
@@ -67,7 +67,7 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 								indexorrange: {uid: entityId}};
 						rl.singleIndexQuery(arg, function(err, result){
 							if(err || result.code != 0){
-								console.log('Oops! '+err);
+								err = '3: '+err;
 							}
 							callback(err)
 						});
@@ -76,7 +76,9 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 			}
 		});
 	},function(err){
-		if(!err){
+		if(err){
+			err = 'Oops! createEntities '+err;
+		}else{
 			console.log('---- '+entity_type+' added ----');
 		}
 		then(err);
@@ -98,6 +100,7 @@ switch(sequence){
 case 1: // add some users
 	
 	// EXERCISE: observe how the user objects are stored in Redis exactly as spelled-out by the config in dtree.js
+	//	- note that user id/details are made on redis6380
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	var users = [];
@@ -125,6 +128,7 @@ case 1: // add some users
 case 2: // add some groups
 
 	// EXERCISE: observe how the group objects are stored in Redis exactly as spelled-out by the config in dtree.js
+	//	- note that group id/details are made on redis6379; different cluster from the user id/details
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	var groups = [];
@@ -166,7 +170,7 @@ case 3: // add some memberships
 				indexorrange: {xid: 10}};
 		rl.singleIndexQuery(arg, function(err, result){
 			if(err || result.code != 0){
-				console.log('Oops! '+err);
+				err = '1: '+err;
 				callback(err);
 			}else{
 				var members = result.data;
@@ -174,7 +178,7 @@ case 3: // add some memberships
 				arg.cmd = myGroupSetKey.getCommand().randmember;
 				rl.singleIndexQuery(arg, function(err, result){
 					if(err || result.code != 0){
-						console.log('Oops! '+err);
+						err = '2: '+err;
 						callback(err);
 					}else{
 						var entities = result.data;
@@ -193,7 +197,7 @@ case 3: // add some memberships
 							indexlist: indexList};
 						rl.indexListQuery(arg, function(err, result){
 							if(err || result.code != 0){
-								console.log('Oops! '+err);
+								err = '3: '+err;
 							}
 							cb(err);
 						});
@@ -203,7 +207,7 @@ case 3: // add some memberships
 		});
 	},function(err){
 		if(err){
-			console.log('Oops! '+err);
+			err = 'Oops! case3 '+err;
 		}else{
 			console.log('---- memberships added ----');
 		}
@@ -223,7 +227,7 @@ case 4:
 			indexorrange: {entityid:999188000, firstnames:null}};	// field-branches are searched only if their property exist
 	rl.singleIndexQuery(arg, function(err, result){
 		if(err || result.code != 0){
-			console.log('Oops! '+err);
+			err = 'Oops! case4: '+err;
 		}else{
 			console.log(result.data);
 		}
@@ -238,7 +242,7 @@ case 5:
 			indexorrange: {entityid:555188000, firstnames:null, lastnames:null}};
 	rl.singleIndexQuery(arg, function(err, result){
 		if(err || result.code != 0){
-			console.log('Oops! '+err);
+			err = 'Oops! case5: '+err;
 		}else{
 			console.log(result.data);
 		}
@@ -263,7 +267,7 @@ case 6:
 			indexlist: indexList};
 	rl.indexListQuery(arg, function(err, result){
 		if(err || result.code != 0){
-			console.log('Oops! '+err);
+			err = 'Oops! case6: '+err;
 		}else{
 			console.log(result.data);
 		}
@@ -273,7 +277,6 @@ case 6:
 
 // rangers
 
-/*
 case 7:
 	// query for an existing object - based on multiple fields
 	break;
@@ -283,7 +286,7 @@ case 8:
 case 9:
 	// query for existing and non-existing objects
 	break;
-
+/*
 // mergers
 
 case 7:
@@ -296,17 +299,8 @@ case 9:
 	// query for existing and non-existing objects
 	break;
 
-127.0.0.1:6379> srandmember redislayer:example:groupset 10
- 1) "99998000"
- 2) "99958000"
- 3) "99982000"
- 4) "999174000"
- 5) "999140000"
- 6) "999152000"
- 7) "99942000"
- 8) "99920000"
- 9) "99950000"
-10) "99984000"
+// migrants
+
 */
 default:
 	isNotComplete = false;
@@ -317,23 +311,9 @@ function(err){
 	if(!err){
 		console.log("---- That's all folks! ----");
 	}else{
+		console.log(err);
 		console.log("---- please submit a pull-request to fix the error ----");
 	}
 });	
 
 
-
-/*
-
-// TODO
-// rangers
-cmd = key.getCommand().rangeasc;		// range in ascending order
-// rl.singleIndexQuery()
-
-// mergers
-// rl.mergeStreams()
-
-// migrants
-// rl.migrate()
-
-*/

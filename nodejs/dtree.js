@@ -183,7 +183,7 @@ var dtree = {
 			// each field may have it's own getter except with clusterinstance, which takes a single function
 			// obviously, inner getters/settings take precedence over outter ones
 			configgetter: {
-				clusterinstance: null,		// not defined per field
+				clusterinstance: null,		// not defined per field; see signature above
 				minvalue: [],
 				maxvalue: [],
 				nextchain: [],
@@ -208,7 +208,7 @@ var dtree = {
 			id:	'hash_entitydetails',
 			index:	{
 				fields: ['entityid', 'firstnames', 'lastnames', 'comment'],
-				fieldprependskey: [null, true, true, true],	// 3 field-branches
+				fieldprependskey: [null, true, true, true],	// 3 so-called field-branches
 				offsets: [500+idPrefixInfoOffset],
 				offsetprependsuid: [true],
 				types:	['integer', 'text', 'text', 'text']
@@ -217,13 +217,13 @@ var dtree = {
 				id:'hkey_group',
 				label:'redislayer:example:group:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['1000'].master;},
+					clusterinstance: function(arg){return rl.getCluster()['1000'].master;},
 				}
 				},{
 				id:'hkey_user',
 				label:'redislayer:example:user:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['2000'].master;},
+					clusterinstance: function(arg){return rl.getCluster()['2000'].master;},
 				}
 			}]
 			},{
@@ -247,7 +247,7 @@ var dtree = {
 				id:'skey_userid',
 				label:'redislayer:example:user:id',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getClusterList()['2000'].master;},
+					clusterinstance: function(arg){return rl.getCluster()['2000'].master;},
 				}
 			}],
 		}]

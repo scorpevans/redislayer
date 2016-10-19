@@ -391,12 +391,13 @@ datatype.loadTree = function(dtree){
 			var configGetter = cfg.configgetter || {};
 			var fieldList = datatype.getConfigIndexProp(cfgObj, 'fields');
 			for(var fld in fldGetter){
+				var getter = configGetter[fld];
 				if(fld == 'clusterinstance'){
 					cfgObj[fldGetter[fld]](getter);
 				}else{
 					var getterList = configGetter[fld] || [];
 					for(var k=0; k < fieldList.length; k++){
-						var getter = getterList[k];
+						getter = getterList[k];
 						if(getter != null){
 							cfgObj[fldGetter[fld]](getter, fieldList[k]);
 						}
@@ -408,12 +409,13 @@ datatype.loadTree = function(dtree){
 				var keyObj = datatype.createKey(key.id, key.label, cfgObj, true);
 				var keyGetter = key.keygetter || {};
 				for(var fld in fldGetter){
+					var getter = keyGetter[fld];
 					if(fld == 'clusterinstance'){
 						keyObj[fldGetter[fld]](getter);
 					}else{
 						var getterList = keyGetter[fld] || [];
 						for(var l=0; l < fieldList.length; l++){
-							var getter = getterList[l];
+							getter = getterList[l];
 							if(getter != null){
 								keyObj[fldGetter[fld]](getter, fieldList[l]);
 							}
