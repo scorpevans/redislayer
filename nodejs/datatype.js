@@ -2,23 +2,25 @@ var cluster = require('./cluster');
 var utils = require('./utils');
 
 
-	// CONFIGURATIONS
-var	separator_key = ':',								// separator for parts of keys
-	separator_detail = '\u0000',							// separator for parts of values i.e. UID and XID
-	collision_breaker = '\u0000?*$#\u0000\u0000?#-*',				// appending this to a UID guarantees it doesn't collide with another
-	redis_max_score_factor = Math.pow(10,15),
-	asc = '_label_ascending',							// direction of ranging -- typically over sorted-sets
+var	asc = '_label_ascending',							// direction of ranging -- typically over sorted-sets
 	desc = '_label_descending',							// direction of ranging -- typically over sorted-sets
 	access_code = 'datatype._do_not_access_fields_with_this',			// used to lock internal-configs or leaf nodes of dicts see utils.wrap
+	redis_max_score_factor = Math.pow(10,15),
+	label_key_separator = '_separator_key',
+	label_detail_separator = '_separator_detail',
+	label_collision_breaker = '_collision_breaker',
 	label_cluster_instance_getter = '_cluster_instance_function',
-	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){
-					return cluster.getDefault().master;}),
-	// functions relating to configs with key-suffixes
-	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	label_field_min_value_getter = '_field_min_value_getter_function',		// {field1: function1,..}; see default_get_field_min_value
 	label_field_max_value_getter = '_field_max_value_getter_function',		// {field1: function1,..}; see default_get_field_max_value
 	label_field_next_chain_getter = '_field_next_chain_getter_function',		// {field1: function1,..}; see default_get_next_chain
 	label_field_previous_chain_getter = '_field_previous_chain_getter_function',	// {field1: function1,..}; see default_get_previous_chain
+	default_key_separator = ':',							// separator for parts of keys
+	default_detail_separator = '\u0000',						// separator for parts of values i.e. UID and XID
+	default_collision_breaker = '\u0000?*$#\u0000\u0000?#-*',			// appending this to a UID guarantees it doesn't collide with another
+	default_get_cluster_instance = (function(cmd, keys, keysuffix_index, key_field){
+					return cluster.getDefault().master;}),
+	// functions relating to configs with key-suffixes
+	// keys should have these functions attached if the datatype has key-suffixes; in order to compute getKeyChains
 	// these defaults assume inputs are natural numbers
 	// more optimal implementations should be given, in order to produce only the required keychain
 	default_get_field_min_value = (function(){return 0;}),				// returns current min value of field
@@ -39,23 +41,23 @@ var unwrap = function datatypeUnwrap(caller){
 
 var command = {};
 
-command.getAscendingOrderLabel = function(){
+command.getAscendingOrderLabel = function getCommandAscendingOrderLabel(){
 	return asc;
 };
 
-command.getDescendingOrderLabel = function(){
+command.getDescendingOrderLabel = function getCommandDescendingOrderLabel(){
 	return desc;
 };
 
-command.toRedis = function(cmd){
+command.toRedis = function commandToRedis(cmd){
 	return unwrap(cmd).val;
 };
 
-command.getType = function(cmd){
+command.getType = function getCommandType(cmd){
 	return unwrap(cmd).type;
 };
 
-command.getOrder = function(cmd){
+command.getOrder = function getCommandOrder(cmd){
 	return unwrap(cmd).order;
 };
 
@@ -70,10 +72,9 @@ var structure = {
 					add: {type:'adds', val:'sadd', multi: true},
 					del: {type:'dels', val:'srem', multi: true},
 					randmember: {type:'randmembers', val:'srandmember'},
+					ismember:{type: 'ismembers', val: 'sismember'},
 					count: {type:'counts', val: 'count',
-						mode: [{
-							bylex: {type: 'countbylexs', val: 'sismember'},
-							bykey: {type: 'countbykeys', val: 'scard'}}]}}],
+						mode: [{bykey: {type: 'countbykeys', val: 'scard'}}]}}],
 				config: [{}]},
 			string: {
 				command: [{
@@ -122,7 +123,8 @@ var structure = {
 						mode: [{
 					      		byscore: {type: 'countbyscorez', val: 'zcount'},
 							bylex: {type: 'countbylexz', val: 'zlexcount'},
-							bykey: {type: 'countbykeyz', val: 'zcard'}}]},
+							bykey: {type: 'countbykeyz', val: 'zcard'},
+							byscorelex: {type: 'countbyscorelexz', val: 'eval'}}]},
 					rankasc: {	type: 'rankz', val: 'indexasc', order: asc,
 							mode: [{
 					      			byscorelex: {type: 'rankbyscorelexz', val: 'eval', order: asc},
@@ -137,7 +139,7 @@ var structure = {
 	};
 
 
-getKeyLabelFunction = function(caller, label, field){
+getKeyLabelFunction = function getDatatypeKeyLabelFunction(caller, label, field){
 	var obj = unwrap(caller)[label];
 	obj = (field != null ? (obj || {})[field] : obj);				// function for specific field
 	if(obj == null){
@@ -166,7 +168,7 @@ getKeyLabelFunction = function(caller, label, field){
 	return obj;
 };
 
-setKeyLabelFunction = function(caller, label, obj, field){
+setKeyLabelFunction = function setDatatypeKeyLabelFunction(caller, label, obj, field){
 	var dict = unwrap(caller);
 	if(field == null){
 		dict[label] = obj;
@@ -182,43 +184,61 @@ setKeyLabelFunction = function(caller, label, obj, field){
 var kcf = ['getFieldMinValueGetter','getFieldMaxValueGetter','getFieldNextChainGetter','getFieldPreviousChainGetter'
 	,'setFieldMinValueGetter','setFieldMaxValueGetter','setFieldNextChainGetter','setFieldPreviousChainGetter'];
 
-getClusterInstanceGetter = function(){
+getKeySeparator = function getDatatypeKeySeparator(){
+	return getKeyLabelFunction(this, label_key_separator, null);
+};
+getDetailSeparator = function getDatatypeDetailSeparator(){
+	return getKeyLabelFunction(this, label_detail_separator, null);
+};
+getCollisionBreaker = function getDatatypeCollisionBreaker(){
+	return getKeyLabelFunction(this, label_collision_breaker, null);
+};
+getClusterInstanceGetter = function getClusterInstanceGetter(){
 	return getKeyLabelFunction(this, label_cluster_instance_getter, null);
 };
-getFieldMinValueGetter = function(field){
+getFieldMinValueGetter = function getFieldMinValueGetter(field){
 	return getKeyLabelFunction(this, label_field_min_value_getter, field);
 };
-getFieldMaxValueGetter = function(field){
+getFieldMaxValueGetter = function getFieldMaxValueGetter(field){
 	return getKeyLabelFunction(this, label_field_max_value_getter, field);
 };
-getFieldNextChainGetter = function(field){
+getFieldNextChainGetter = function getFieldNextChainGetter(field){
 	return getKeyLabelFunction(this, label_field_next_chain_getter, field);
 };
-getFieldPreviousChainGetter = function(field){
+getFieldPreviousChainGetter = function getFieldPreviousChainGetter(field){
 	return getKeyLabelFunction(this, label_field_previous_chain_getter, field);
 };
 
-setClusterInstanceGetter = function(func){
-	return setKeyLabelFunction(this, label_cluster_instance_getter, func, null);
+setKeySeparator = function setKeySeparator(func){
+	setKeyLabelFunction(this, label_key_separator, func, null);;
 };
-setFieldMinValueGetter = function(obj, field){
-	return setKeyLabelFunction(this, label_field_min_value_getter, obj, field);
+setDetailSeparator = function setDetailSeparator(func){
+	setKeyLabelFunction(this, label_detail_separator, func, null);;
 };
-setFieldMaxValueGetter = function(obj, field){
-	return setKeyLabelFunction(this, label_field_max_value_getter, obj, field);
+setCollisionBreaker = function setCollisionBreaker(func){
+	setKeyLabelFunction(this, label_collision_breaker, func, null);;
 };
-setFieldNextChainGetter = function(obj, field){
-	return setKeyLabelFunction(this, label_field_next_chain_getter, obj, field);
+setClusterInstanceGetter = function setClusterInstanceGetter(func){
+	setKeyLabelFunction(this, label_cluster_instance_getter, func, null);
 };
-setFieldPreviousChainGetter = function(obj, field){
-	return setKeyLabelFunction(this, label_field_previous_chain_getter, obj, field);
+setFieldMinValueGetter = function setFieldMinValueGetter(obj, field){
+	setKeyLabelFunction(this, label_field_min_value_getter, obj, field);
+};
+setFieldMaxValueGetter = function setFieldMaxValueGetter(obj, field){
+	setKeyLabelFunction(this, label_field_max_value_getter, obj, field);
+};
+setFieldNextChainGetter = function setFieldNextChainGetter(obj, field){
+	setKeyLabelFunction(this, label_field_next_chain_getter, obj, field);
+};
+setFieldPreviousChainGetter = function setFieldPreviousChainGetter(obj, field){
+	setKeyLabelFunction(this, label_field_previous_chain_getter, obj, field);
 };
 
 
 // methods for commands
 // for ClusterInstanceGetter, user may require info of whether command is read or write
 var setterCommandPrefixes = ['add', 'del', 'upsert', 'incr'];
-isWriter = function(){
+isWriter = function isCommandWriter(){
 	var cmdType = command.getType(this);
 	for(var i=0; i < setterCommandPrefixes.length; i++){
 		var prefix = setterCommandPrefixes[i];
@@ -229,16 +249,17 @@ isWriter = function(){
 	return false;
 };
 
-isReader = function(){
+isReader = function isCommandReader(){
 	return !this.isWriter;
 };
 
-isMulti = function(){
+isMulti = function isCommandMulti(){
 	return (unwrap(this).multi == true);
 };
 
 // attach methods to structures
-var structMethods = kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter']);
+var structMethods = kcf.concat(['setClusterInstanceGetter', 'getClusterInstanceGetter', 'setKeySeparator', 'getKeySeparator'
+				, 'setDetailSeparator', 'getDetailSeparator', 'setCollisionBreaker', 'getCollisionBreaker']);
 var commandMethods = ['isMulti', 'isWriter', 'isReader'];
 structure[access_code] = {_all: structMethods};
 structure.datatype.struct[0][access_code] = {_all: structMethods};
@@ -263,53 +284,44 @@ datatype.setFieldMinValueGetter(default_get_field_min_value);
 datatype.setFieldMaxValueGetter(default_get_field_max_value);
 datatype.setFieldNextChainGetter(default_get_next_chain);
 datatype.setFieldPreviousChainGetter(default_get_previous_chain);
+datatype.setKeySeparator(default_key_separator);
+datatype.setDetailSeparator(default_detail_separator);
+datatype.setCollisionBreaker(default_collision_breaker);
 
-
-datatype.getKeySeparator = function(){
-	return separator_key;
-};
-
-datatype.getDetailSeparator = function(){
-	return separator_detail;
-};
-
-datatype.getCollisionBreaker = function(){
-	return collision_breaker;
-};
-
-datatype.getRedisMaxScoreFactor = function(){
+datatype.getRedisMaxScoreFactor = function getRedisMaxScoreFactor(){
 	return redis_max_score_factor;
 };
 
-datatype.getConfigIndexProp = function(config, prop){
+datatype.getConfigIndexProp = function getDatatypeConfigIndexProp(config, prop){
 	return ((unwrap(config).indexconfig || {})[prop] || []);
 };
+
 
 var dataConfig = {};
 var dataKey = {};
 
-datatype.getConfig = function(){
+datatype.getConfig = function getDatatypeConfig(){
 	return dataConfig;
 };
-datatype.getKey = function(){
+datatype.getKey = function getDatatypeKey(){
 	return dataKey;
 };
 
 
-getIndexConfig = function(){
+getIndexConfig = function getConfigIndexConfig(){
 	return unwrap(this).indexconfig;
 };
-getFieldIdx = function(field){
+getFieldIdx = function getConfigFieldIdx(field){
 	return datatype.getConfigFieldIdx(this, field);
 };
-getPropFieldIdxValue = function(prop, field_idx){
+getPropFieldIdxValue = function getConfigPropFieldIdxValue(prop, field_idx){
 	return datatype.getConfigPropFieldIdxValue(this, prop, field_idx);
 };
-getFieldOrdering = function(joint_map, joints){
+getFieldOrdering = function getConfigFieldOrdering(joint_map, joints){
 	return datatype.getConfigFieldOrdering(this, joint_map, joints);
 };
 
-datatype.createConfig = function(id, struct, index_config, on_tree){
+datatype.createConfig = function createDatatypeConfig(id, struct, index_config, on_tree){
 	var structConfig = (on_tree == false || struct == null ? {} : struct.getConfig());
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
@@ -325,14 +337,14 @@ datatype.createConfig = function(id, struct, index_config, on_tree){
 	return api[id];
 };
 
-getLabel = function(){
+getLabel = function getKeyLabel(){
 	return unwrap(this).label;
 };
-getCommand = function(){	// shortcut
+getCommand = function getKeyCommand(){	// shortcut
 	return this.getConfig().getStruct().getCommand();
 };
 
-datatype.createKey = function(id, label, key_config, on_tree){
+datatype.createKey = function createDatatypeKey(id, label, key_config, on_tree){
 	// allow struct to take nulls, in which case the Key is not bound to singleton datatype structure
 	var configKey = (on_tree == false || key_config == null ? {} : key_config.getKey());
 	var store = {api:configKey, keyconfig:{}, keywrap:{}};
@@ -350,7 +362,7 @@ datatype.createKey = function(id, label, key_config, on_tree){
 
 
 // TODO add checkers to e.g. inform user of malformed configurations, etc
-datatype.loadTree = function(dtree){
+datatype.loadTree = function loadDatatypeTree(dtree){
 	var fldGetter = {'clusterinstance': 'setClusterInstanceGetter',
 			'minvalue': 'setFieldMinValueGetter',
 			'maxvalue': 'setFieldMaxValueGetter',
@@ -428,7 +440,7 @@ datatype.loadTree = function(dtree){
 };
 
 
-datatype.getKeyFieldBoundChain = function(key, field, cmd_order){
+datatype.getKeyFieldBoundChain = function getDatatypeKeyFieldBoundChain(key, field, cmd_order){
 	var fieldBoundValueGetter = null;
 	if(cmd_order == desc){
 		fieldBoundValueGetter = key.getFieldMinValueGetter(field);
@@ -438,7 +450,7 @@ datatype.getKeyFieldBoundChain = function(key, field, cmd_order){
 	return fieldBoundValueGetter();
 };
 
-datatype.getKeyFieldNextChain = function(key, field, cmd_order, chain){
+datatype.getKeyFieldNextChain = function getDatatypeKeyFieldNextChain(key, field, cmd_order, chain){
 	var fieldNextChainGetter = null;
 	if(cmd_order == desc){
 		fieldNextChainGetter = key.getFieldPreviousChainGetter(field);
@@ -448,7 +460,7 @@ datatype.getKeyFieldNextChain = function(key, field, cmd_order, chain){
 	return fieldNextChainGetter(chain);
 };
 
-datatype.isKeyFieldChainWithinBound = function(config, fieldIdx, cmd_order, chain, bound_chain){
+datatype.isKeyFieldChainWithinBound = function isDatatypeKeyFieldChainWithinBound(config, fieldIdx, cmd_order, chain, bound_chain){
 	var type = datatype.getConfigPropFieldIdxValue(config, 'types', fieldIdx);
 	if(type == 'integer' || type == 'float'){
 		chain = parseFloat(chain);
@@ -465,34 +477,34 @@ datatype.isKeyFieldChainWithinBound = function(config, fieldIdx, cmd_order, chai
 };
 
 
-datatype.getConfigFieldIdx = function(config, field){
+datatype.getConfigFieldIdx = function getDatatypeConfigFieldIdx(config, field){
 	var idx = datatype.getConfigIndexProp(config, 'fields').indexOf(field);
 	return (idx >= 0 ? idx : null);
 };
 
-datatype.getConfigPropFieldIdxValue = function(config, prop, field_idx){
+datatype.getConfigPropFieldIdxValue = function getDatatypeConfigPropFieldIdxValue(config, prop, field_idx){
 	return datatype.getConfigIndexProp(config, prop)[field_idx];
 };
 
 
-datatype.isConfigFieldScoreAddend = function(config, field_idx){
+datatype.isConfigFieldScoreAddend = function isDatatypeConfigFieldScoreAddend(config, field_idx){
 	return !(!datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx));
 }
-datatype.isConfigFieldKeySuffix = function(config, field_idx){
+datatype.isConfigFieldKeySuffix = function isDatatypeConfigFieldKeySuffix(config, field_idx){
 	// offset=null  =>  retain everything
 	// offset=0	=>  send everything to key
 	return (datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx) != null);
 }
-datatype.isConfigFieldStrictlyKeySuffix = function(config, field_idx){
+datatype.isConfigFieldStrictlyKeySuffix = function isDatatypeConfigFieldStrictlyKeySuffix(config, field_idx){
 	return (datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx) == 0);
 }
-datatype.isConfigFieldBranch = function(config, field_idx){
+datatype.isConfigFieldBranch = function isDatatypeConfigFieldBranch(config, field_idx){
 	return datatype.getConfigPropFieldIdxValue(config, 'fieldprependskey', field_idx) == true;
 }
-datatype.isConfigFieldPartitioned = function(config, field_idx){
+datatype.isConfigFieldPartitioned = function isDatatypeConfigFieldPartitioned(config, field_idx){
 	return datatype.getConfigPropFieldIdxValue(config, 'partitions', field_idx) == true;
 }
-datatype.isConfigPartitioned = function(config){
+datatype.isConfigPartitioned = function isDatatypeConfigPartitioned(config){
 	var partitions = datatype.getConfigIndexProp(config, 'partitions') || [];
 	for(var i=0; i < partitions.length; i++){
 		if(datatype.isConfigFieldPartitioned(config, i)){
@@ -501,12 +513,12 @@ datatype.isConfigPartitioned = function(config){
 	}
 	return false;
 }
-datatype.isConfigFieldUIDPrepend = function(config, field_idx){
+datatype.isConfigFieldUIDPrepend = function isDatatypeConfigFieldUIDPrepend(config, field_idx){
 	var offsetPrependsUID = datatype.getConfigPropFieldIdxValue(config, 'offsetprependsuid', field_idx);
 	return offsetPrependsUID == true;
 }
 // UID datatype.isConfigFieldStrictlyUIDPrepend whereas XID !datatype.isConfigFieldStrictlyUIDPrepend
-datatype.isConfigFieldStrictlyUIDPrepend = function(config, field_idx){
+datatype.isConfigFieldStrictlyUIDPrepend = function isDatatypeConfigFieldStrictlyUIDPrepend(config, field_idx){
 	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', field_idx);
 	var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', field_idx);
 	var isPrepend = datatype.isConfigFieldUIDPrepend(config, field_idx);
@@ -514,7 +526,7 @@ datatype.isConfigFieldStrictlyUIDPrepend = function(config, field_idx){
 }
 
 // decide which hybrid of zrange to use
-datatype.getZRangeSuffix = function(config, index, args, xid, uid){
+datatype.getZRangeSuffix = function getDatatypeZRangeSuffix(config, index, args, xid, uid){
 	// NB: byrank applies to all hybrids
 	// it applies when UID and XID are both not given, and args holds the min/max
 	if((xid == null || xid == '') && (uid == null || uid == '')){
@@ -545,7 +557,7 @@ datatype.getZRangeSuffix = function(config, index, args, xid, uid){
 
 };
 
-splitID = function (id, offset){
+splitID = function datatypeSplitID(id, offset){
 	id = (id != null ? String(id) : id); 		// !!0 != !!'0'
 	if(offset == null){				// index property not included in key
 		return [null, id];
@@ -563,7 +575,7 @@ splitID = function (id, offset){
 		return ['', id];
 	}
 };
-datatype.splitConfigFieldValue = function(config, index, field){
+datatype.splitConfigFieldValue = function datatypeSplitConfigFieldValue(config, index, field){
 	// offset=null  =>  retain everything
 	// offset=0	=>  send everything to key
 	var val = index[field];
@@ -619,7 +631,7 @@ datatype.splitConfigFieldValue = function(config, index, field){
 	return split;
 };
 
-datatype.unsplitFieldValue = function(split, offset){
+datatype.unsplitFieldValue = function datatypeUnsplitFieldValue(split, offset){
 	// some keysuffixes subsume keysuffixes of some members of the offsetgroups
 	// so it must be determined whether both Info and main-offset parts are both applicable
 	// i.e. both offset%100 and offset/100 parts have to be considered
@@ -649,7 +661,7 @@ datatype.unsplitFieldValue = function(split, offset){
 	}
 };
 
-datatype.getFactorizedConfigFieldValue = function(config, field, value){
+datatype.getFactorizedConfigFieldValue = function getFactorizedDatatypeConfigFieldValue(config, field, value){
 	var fieldIndex = datatype.getConfigFieldIdx(config, field);
 	var factor = datatype.getConfigPropFieldIdxValue(config, 'factors', fieldIndex);
 	var isStrictlyValueField = datatype.isConfigFieldStrictlyUIDPrepend(config, fieldIndex);
@@ -660,7 +672,7 @@ datatype.getFactorizedConfigFieldValue = function(config, field, value){
 	}
 };
 
-datatype.getConfigFieldPrefactor = function(config, field_idx){
+datatype.getConfigFieldPrefactor = function getDatatypeConfigFieldPrefactor(config, field_idx){
 	var preFactor = null;
 	for(var i=field_idx-1; i >= 0; i--){
 		preFactor = datatype.getConfigPropFieldIdxValue(config, 'factors', i);
@@ -672,7 +684,7 @@ datatype.getConfigFieldPrefactor = function(config, field_idx){
 };
 
 var label_comparator_prop = '_comparator_prop';
-datatype.jointMap = function(){
+datatype.jointMap = function datatypeJointMap(){
 	var jm = {};
 	var myjm = function(key){return (key == access_code ? jm : null);};
 	myjm.addPropMap = function(prop, prop_map){
@@ -684,14 +696,14 @@ datatype.jointMap = function(){
 	};
 	return myjm;
 };
-datatype.getJointMapDict = function(joint_map){
+datatype.getJointMapDict = function getDatatypeJointMapDict(joint_map){
 	return (joint_map != null ? unwrap(joint_map) : null);
 };
-datatype.getJointMapMask = function(joint_map, prop){
+datatype.getJointMapMask = function getDatatypeJointMapMask(joint_map, prop){
 	var jm = datatype.getJointMapDict(joint_map);
 	return (((jm || {})[prop] || {})[label_comparator_prop] || prop);
 };
-datatype.addJointMapMask = function(joint_map, prop, prop_map){
+datatype.addJointMapMask = function addDatatypeJointMapMask(joint_map, prop, prop_map){
 	var jm = datatype.getJointMapDict(joint_map);
 	jm[prop] = jm[prop] || {};
 	jm[prop][label_comparator_prop] = prop_map;
@@ -701,7 +713,7 @@ datatype.addJointMapMask = function(joint_map, prop, prop_map){
 //	it seems more like datatype.configFieldOrd
 //	then, getConfigFieldOrdering seems not to need joints and joint_map arguments
 //	then, it seems datatype.jointMap belongs to join.js
-datatype.jointOrd = function(){
+datatype.jointOrd = function datatypeJointOrd(){
 	// keytext, score & uid hold props from joints
 	// fieldconfig:{fmap1:{config:#, field:#}, fmap2:{..}, ..}
 	// 	mask holds fields (which have a mapping to joints) and their respective configs
@@ -737,30 +749,30 @@ datatype.jointOrd = function(){
 	};
 	return myord;
 };
-getJointOrdDict = function(joint_ord){
+getJointOrdDict = function getJointOrdDict(joint_ord){
 	return (joint_ord != null ? unwrap(joint_ord) : null);
 };
-datatype.getJointOrdProp = function(joint_ord, prop){
+datatype.getJointOrdProp = function getDatatypeJointOrdProp(joint_ord, prop){
 	var jm = getJointOrdDict(joint_ord);
 	return (jm || {})[prop];
 };
-datatype.resetJointOrdMask = function(joint_ord){
+datatype.resetJointOrdMask = function resetDatatypeJointOrdMask(joint_ord){
 	var jm = getJointOrdDict(joint_ord);
 	jm.mask = {};
 };
-datatype.getJointOrdMaskPropField = function(joint_ord, prop){
+datatype.getJointOrdMaskPropField = function getDatatypeJointOrdMaskPropField(joint_ord, prop){
 	return (joint_ord != null ? joint_ord.getMaskPropField(prop) : null);
 };
-datatype.getJointOrdMaskPropConfig = function(joint_ord, prop){
+datatype.getJointOrdMaskPropConfig = function getDatatypeJointOrdMaskPropConfig(joint_ord, prop){
 	return (joint_ord != null ? joint_ord.getMaskPropConfig(prop) : null);
 };
-datatype.addJointOrdMask = function(joint_ord, fmask, field, config){
+datatype.addJointOrdMask = function addDatatypeJointOrdMask(joint_ord, fmask, field, config){
 	if(joint_ord != null){
 		joint_ord.addMask(fmask, field, config);
 	}
 };
 
-datatype.normalizeOrd = function(ord){
+datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
       	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
 	// this also reduces unnecessary comparisons
 	// merge the edges of the 3 ordParts
@@ -802,7 +814,7 @@ datatype.normalizeOrd = function(ord){
 	so once again to improved ordering matches regardless on where values are stored, floats should be padded whenever they are placed in UIDs
 	the float '123.321' should be stored as 'aa123.321'; the 'a' padding per tenth degree reinstates the float ordering
 */
-datatype.getConfigFieldOrdering = function(config, joint_map, joints){
+datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config, joint_map, joints){
 	var ord = new datatype.jointOrd();
 	// convert encoding to [fieldIdx, cmp_field] pairs
 	var cmpProps = joints;
@@ -864,7 +876,7 @@ datatype.getConfigFieldOrdering = function(config, joint_map, joints){
 };
 
 //ord => {keytext:[], score:[], uid:[]};
-datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index_comparator, ref_comparator){
+datatype.getComparison = function getDatatypeComparison(order, unmasked_fields, ord, index, ref, index_comparator, ref_comparator){
 	order = order || datatype.getAscendingOrderLabel();
 	var unmaskField = function(fld){return (unmasked_fields || [])[fld] || fld;};
 	var numeric = ['integer', 'float'];
@@ -914,7 +926,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, keytext, '+keytext+', '+indexVal+', '+refVal, 'FATAL:');
+			console.error('datatype.getComparison, keytext, '+keytext+', '+indexVal+', '+refVal);
 			return null;
 		}
 	}
@@ -956,7 +968,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, score, '+score+', '+indexVal+', '+refVal, 'FATAL:');
+			console.err('datatype.getComparison, score, '+score+', '+indexVal+', '+refVal, 'FATAL:');
 			return null;
 		}
 	}
@@ -1002,7 +1014,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 	       	}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('datatype.getComparison, uid, '+uid+', '+indexVal+', '+refVal, 'FATAL:');
+			console.error('datatype.getComparison, uid, '+uid+', '+indexVal+', '+refVal, 'FATAL:');
 			return null;
 		}
 	}
@@ -1011,7 +1023,7 @@ datatype.getComparison = function(order, unmasked_fields, ord, index, ref, index
 };
 
 
-command.getRangeMode = function(cmd){
+command.getRangeMode = function getCommandRangeMode(cmd){
 	var cmdType = command.getType(cmd);
 	if(cmdType.slice(-11) == 'byscorelexz'){
 		return 'byscorelex';
@@ -1029,14 +1041,14 @@ command.getRangeMode = function(cmd){
 // TODO consider appending such flags directly to the command dict; especially command.requiresXID and command.requiresUID
 
 // command which run over a certain range
-command.isOverRange = function(cmd){
+command.isOverRange = function isCommandOverRange(cmd){
 	var cmdType = command.getType(cmd);
 	return (cmdType.slice(-1) == 'z' && (utils.startsWith(cmdType, 'range')
 						|| utils.startsWith(cmdType, 'count') || utils.startsWith(cmdType, 'delrange')));
 };
 
 var xidCommandPrefixes = ['add', 'incrby', 'decrby', 'upsert', 'randmember', 'rangebyscore', 'countbyscore', 'rankbyscore', 'delrangebyscore'];
-command.requiresXID = function(cmd){
+command.requiresXID = function requiresCommandXID(cmd){
 	var cmdType = command.getType(cmd);
 	if(cmdType == 'adds'){
 		return false;
@@ -1051,7 +1063,7 @@ command.requiresXID = function(cmd){
 };
 
 var uidCommandPrefixes = ['add', 'incr', 'decr', 'get', 'upsert', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
-command.requiresUID = function(cmd){
+command.requiresUID = function requiresCommandUID(cmd){
 	var cmdType = command.getType(cmd);
 	// string/key struct doesn't take UID
 	if(cmdType.slice(-1) == 'k'){
@@ -1069,29 +1081,26 @@ command.requiresUID = function(cmd){
 
 // internal routines do not rely on external interfaces; just in case the external ones are deprecated
 // hence redefinitions here!
-datatype.getConfigId = function(config){
+datatype.getConfigId = function getDatatypeConfigId(config){
 	return config.getId();
 };
-datatype.getKeyConfig = function(key){
+datatype.getKeyConfig = function getDatatypeKeyConfig(key){
 	return key.getConfig();
 };
-datatype.getConfigStructId = function(config){
+datatype.getConfigStructId = function getDatatypeStructId(config){
 	return config.getStruct().getId();
 };
-datatype.getConfigCommand = function(config){
+datatype.getConfigCommand = function getDatatypeConfigCommand(config){
 	return config.getStruct().getCommand();
 };
-datatype.getCommandMode = function(cmd){
-	return cmd.getMode();
-};
-datatype.getKeyLabel = function(key){
+datatype.getKeyLabel = function getDatatypeKeyLabel(key){
 	return key.getLabel();
 };
-datatype.getKeyClusterInstanceGetter = function(key){
+datatype.getKeyClusterInstanceGetter = function getDatatypeKeyClusterInstanceGetter(key){
 	return key.getClusterInstanceGetter();
 };
 // TODO: this and other such routines can be switched off iff cluster-instance choices don't need it
-datatype.getKeyFieldSuffixIndex = function(key, field, index){
+datatype.getKeyFieldSuffixIndex = function getDatatypeKeyFieldSuffixIndex(key, field, index){
 	var keySuffixIndex = {};
 	var config = key.getConfig();
 	var index = index || {};
@@ -1112,7 +1121,10 @@ datatype.getKeyFieldSuffixIndex = function(key, field, index){
 	return keySuffixIndex;
 };
 
-command.isMulti = function(cmd){
+command.getMode = function getCommandMode(cmd){
+	return cmd.getMode();
+};
+command.isMulti = function getDatatypeIsCommandMulti(cmd){
 	return cmd.isMulti();
 };
 

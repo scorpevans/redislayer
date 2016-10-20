@@ -11,6 +11,7 @@ var migrate = require('./migrate');
 
 redislayer = {
 
+
 /* CLUSTER
 Database-cluster connections are loaded into redislayer so that they can be used for storage configurations.
 One of these clusters should be designated the default-cluster of this redislayer instance;
@@ -23,14 +24,20 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 */
 	
 	/*
+	 * @param	{number}	the id of the cluster to be designated as the default-cluster
+	 */
+	setDefaultClusterId: cluster.setDefaultId,
+
+	/*
 	 * @return	{number}	the id of the cluster designated as the default-cluster
 	 */
 	getDefaultClusterId: cluster.getDefaultId,
 
-	/*
-	 * @param	{number}	the id of the cluster to be designated as the default-cluster
+	/**
+	 * @return	{object}	the default-cluster along with the Roles with which it was configured
+	 *				NB: instantiate the cluster by selecting a Role of the returned object
 	 */
-	setDefaultClusterId: cluster.setDefaultId,
+	getDefaultCluster: cluster.getDefault,
 
 	/**
 	 * @param	{number}	the id of the cluster to fetch; NULL value returns all clusters
@@ -39,11 +46,6 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 	 */
 	getCluster: cluster.getList,
 
-	/**
-	 * @return	{object}	the default-cluster along with the Roles with which it was configured
-	 *				NB: instantiate the cluster by selecting a Role of the returned object
-	 */
-	getDefaultCluster: cluster.getDefault,
 
 	/**
 	 * @param	{number}	the id of the cluster to remove from redislayer
@@ -59,6 +61,7 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 		cluster.loadList(arg.clist);
 	},
 
+
 /* DATATYPE
 The core of Redislayer is the configuration of how data objects should be stored/retrieved, and on/from which cluster.
 See dtree.js for a sample configuration illustrating the [datatype ->- struct ->- config ->- key] hierarchy
@@ -70,14 +73,49 @@ Key/Config/Struct objects have methods to set or get properties they were config
 Key objects also have a command-set depending on the Struct under which they are configured.
 */
 
+	// reasonable defaults have been set for the following configurations
 	/**
-	 * recommended approach to creating multiple configs and keys
+	 * @param	{string}	the string used to separate key-parts e.g. ':' as in user:name:first
+	 */
+	setKeySeparator: datatype.setKeySeparator,
+	/**
+	 * @param	{string}	the string used to separate data parts e.g. '|' as in john|doe|3
+	 */
+	setDetailSeparator: datatype.setDetailSeparator,
+	/** redislayer may need to make it's own probing insertions/deletions; it must be ensured data is not overwritten
+	 * @param	{string}	a messy string which is guaranteed not to be found in any stored data
+	 */
+	setCollisionBreaker: datatype.setCollisionBreaker,
+
+	/**
+	 * @return	{string}	see setKeySeparator
+	 */
+	getKeySeparator: datatype.getKeySeparator,
+	/**
+	 * @return	{string}	see getDetailSeparator
+	 */
+	getDetailSeparator: datatype.getDetailSeparator,
+	/**
+	 * @return	{string}	see setCollisionBreaker
+	 */
+	getCollisionBreaker: datatype.getCollisionBreaker,
+
+	/**
+	 * @return	{number}	the maximum 
+	 */
+	getRedisMaxScoreFactor: datatype.getRedisMaxScoreFactor,
+
+	/**
+	 * recommended approach to creating configs, keys and getters
 	 * @param	{object}	arg - a dict
 	 * @param	{object}	arg.dtree - see dtree.js for sample
 	 */
 	loadDatatypeTree: function loadDatatypeTree(arg){
 		datatype.loadTree(arg.dtree);
 	},
+
+	// the following section is API offer getters and setters to dtree
+	// they are best understood by first taking a look at dtree.js
 	
 	/**
 	 * @return	{object}	get the different types of data structures available
@@ -93,6 +131,31 @@ Key objects also have a command-set depending on the Struct under which they are
 	 * @return	{object}	available keys
 	 */
 	getKey: datatype.getKey,
+
+	/*
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultClusterInstanceGetter: datatype.getClusterInstanceGetter,
+
+	/*
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldMinValueGetter: datatype.getFieldMinValueGetter,
+
+	/*
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldMaxValueGetter: datatype.getFieldMaxValueGetter,
+
+	/*
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldPreviousKeySuffixGetter: datatype.getFieldPreviousChainGetter,
+
+	/*
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldKeySuffixChainGetter: datatype.getFieldNextChainGetter,
 	
 	/**
 	 * @param	{object}	arg - a dict
@@ -117,13 +180,32 @@ Key objects also have a command-set depending on the Struct under which they are
 	createKey: function createKey(arg){
 		return datatype.createKey(arg.id, arg.label, arg.config, arg.ontree)
 	},
+
+	/*
+	 * @param	{function}	see getDefaultClusterInstanceGetter
+	 */
+	setDefaultClusterInstanceGetter: datatype.setClusterInstanceGetter,
+
+	/*
+	 * @param	{function}	see getDefaultFieldMinValueGetter
+	 */
+	setDefaultFieldMinValueGetter: datatype.setFieldMinValueGetter,
+
+	/*
+	 * @param	{function}	see getDefaultFieldMaxValueGetter
+	 */
+	setDefaultFieldMaxValueGetter: datatype.setFieldMaxValueGetter,
+
+	/*
+	 * @param	{function}	see getDefaultFieldPreviousKeySuffixGetter
+	 */
+	setDefaultFieldPreviousKeySuffixGetter: datatype.setFieldPreviousChainGetter,
+
+	/*
+	 * @param	{function}	see getDefaultFieldKeySuffixChainGetter
+	 */
+	setDefaultFieldKeySuffixChainGetter: datatype.setFieldNextChainGetter,
 	
-	// configuration getters/setters; see datatype.js
-	// reasonable defaults have been set for all of these
-	getKeySeparator: datatype.getKeySeparator,
-	getDetailSeparator: datatype.getDetailSeparator,
-	getCollisionBreaker: datatype.getCollisionBreaker,
-	getRedisMaxScoreFactor: datatype.getRedisMaxScoreFactor,
 
 /* QUERY
 See examples.js for examples.
@@ -135,6 +217,7 @@ A query Attributes is an object with a subset of the following redis attributes 
 	- nx (boolean)
 	- limit (integer)
 */
+
 	/**
 	 * A query Range or rangeConfig is an object with the following fields:
 	 * 	- index:	an Index on which the Range is based
@@ -164,11 +247,7 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	singleIndexQuery: function singleIndexQuery(arg, then){
-		try{
-			query.singleIndexQuery(arg.cmd, arg.key, arg.indexorrange, arg.attribute, then);
-		}catch(error){
-			then(error);
-		}
+		query.singleIndexQuery(arg.cmd, arg.key, arg.indexorrange, arg.attribute, then);
 	},
 	
 	/**
@@ -182,12 +261,9 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	indexListQuery: function indexListQuery(arg, then){
-		try{
-			query.indexListQuery(arg.cmd, arg.key, arg.indexlist, then);
-		}catch(error){
-			then(error);
-		}
+		query.indexListQuery(arg.cmd, arg.key, arg.indexlist, then);
 	},
+
 	
 /* JOIN
 Redislayer can merge-join multiple input streams provided the join-fields (or joints) are ordered similarly.
@@ -203,7 +279,18 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	- if a Config is not available generate one with redislayer.createConfig; if it is not required that this config
 	is added to redislayer's store of configs, the arg.struct should be NULL.
 	- then use the config object's getFieldOrdering(jointMap, joints) method to generate an ord
-*/	
+*/
+
+	/**
+	 * @param	{string}	the namespace separator to be used for stream aliasing e.g. '.'
+	 */
+	getNamespaceSeparator: join.getNamespaceSeparator,
+	
+	/**
+	 * @return	{string}	see getNamespaceSeparator(string)
+	 */
+	setNamespaceSeparator: join.setNamespaceSeparator,
+
 	/**
 	 * A join stream may use a jointMap to map to possibly different names it has of the join-fields
 	 * Once an instance of jointMap is created, the method addPropMap(join-field-name, local-field-name)
@@ -218,11 +305,13 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * The following fields have to be provided for streamConfigs:
 	 *	- func:	the fullname of the function to be called for the stream's data
 	 * 	- args:	the list of args to be provided to [func]
+	 * 	- namespace:	a unique label across all streamConfigs of a single join;
+	 *			note that streams may have totally unrelated fields with the same name.
+	 *			this label should persist across calls e.g. array-indexes are not good for this
 	 * 	- attributeIndex:	the index of [args] which takes query-attribute object
 	 * 	- cursorIndex:	the index of [args] which takes the cursor object
-	 * 	- namespace:	a unique label across all streamConfigs of a single join;
-				note that streams may have totally unrelated fields with the same name.
-	 *			this label should persist across calls e.g. array-indexes are not good for this
+	 *			NB: the cursor itself should have field-names corresponding to the namespace
+	 *			cursor field-names without getNamespaceSeparator() are always considered part of the current stream
 	 * @constructor
 	 * @return	{object}	a streamConfig
 	 */
@@ -235,7 +324,7 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 *	- setFullJoin():	specify that the join is a full-join
 	 *	- setOrderAsc():	specify that the join is in ascending order
 	 *	- setOrderDesc():	specify that the join is in descending order
-	 * 	- setModeRange():	specify that the joined records should be returned
+	 * 	- setModeList():	specify that the joined records should be listed
 	 * 	- setModeCount():	specify that only the counts of the joined records should be returned
 	 * 	- streamConfigs:	the list of streamConfigs involved in the join
 	 * 	- joints:	the list of fields on which the join is to be performed; the order is not important
@@ -251,24 +340,18 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	mergeStreams: function mergeStreams(arg, then){
-		try{
-			join.mergeStreams(arg.joinconfig, then);
-		}catch(error){
-			then(error);
-		}
+		join.mergeStreams(arg.joinconfig, then);
 	},
+
 	
-// MIGRATE
-	
+/* MIGRATE
+Migrating is simply the call to a function.
+*/
 	/**
 	 * @todo
 	 */
 	migrate: function migrate(arg, then){
-		try{
-			migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
-		}catch(error){
-			then(error);
-		}
+		migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
 	},
 
 	/*

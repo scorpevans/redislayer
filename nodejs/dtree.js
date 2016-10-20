@@ -11,27 +11,24 @@ var zset = rl.getStruct().zset.getId();
  *	dtree = {
  *		id: #,
  *		defaultgetter: {#},
- *		structs:[
- *			{
+ *		structs:[{
+ *			id: #,
+ *			structgetter: {#},
+ *			configs:[{
  *				id: #,
- *				structgetter: {#},
- *				configs:[
- *					{
- *						id: #,
- *						configgetter: {#},
- *						index: {#},
- *						keys:[
- *							{
- *								id: #,
- *								label: #,
- *								keygetter: {#}
- *							},
- *							... more keys
- *						]
- *					},
- *					... more configs
- *				],
+ *				configgetter: {#},
+ *				index: {#},
+ *				keys:[{
+ *					id: #,
+ *					label: #,
+ *					keygetter: {#}
+ *				},
+ *					... more keys
+ *				]
  *			},
+ *				... more configs
+ *			],
+ *		},
  *			... other structs
  *		],
  *	};
@@ -144,7 +141,7 @@ var dtree = {
 				 * 	hence it's not advisable to offset fields which change frequently
 				 *	since updating requires knowledge of the existing value, then a delete, followed by an insert
 				 */
-				offsets: [null, 500+idPrefixInfoOffset, idPrefixInfoOffset],
+				offsets: [null, 600+idPrefixInfoOffset, idPrefixInfoOffset],
 				/**
 				 * if the design is such that several fields would produce the same keysuffix,
 				 * designate the index of only one of them to take care of this; instead of repeating the same suffix in the key
@@ -183,8 +180,16 @@ var dtree = {
 			// each field may have it's own getter except with clusterinstance, which takes a single function
 			// obviously, inner getters/settings take precedence over outter ones
 			configgetter: {
-				clusterinstance: null,		// not defined per field; see signature above
-				minvalue: [],
+				// let's route different key-chains into different clusters
+				clusterinstance: function(arg){
+						var ksi = arg.keysuffixindex;	// NB: note keysuffixindex definition above
+						if(ksi.entityid == '9991'){
+							return rl.getCluster()['2000'].master;
+						}else{
+							return rl.getDefaultCluster().master;
+						} 
+					},
+				minvalue: [],			// these are defined per field
 				maxvalue: [],
 				nextchain: [],
 				previouschain: [],
@@ -202,7 +207,16 @@ var dtree = {
 				}
 			}]
 		}]
-		},{
+	}]
+};
+
+rl.loadDatatypeTree({dtree:dtree});
+
+// let's load another tree
+
+dtree =	{
+	id:	null,	// whatever
+	structs: [{
 		id:	hash,	// redis hash struct
 		configs:[{
 			id:	'hash_entitydetails',
@@ -254,5 +268,5 @@ var dtree = {
 	}],
 };
 
+rl.loadDatatypeTree({dtree:dtree});
 
-module.exports = dtree;

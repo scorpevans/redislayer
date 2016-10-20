@@ -1,7 +1,9 @@
 
 // NB: compliment this examples here with the documentation in redislayer.js
 // WARNING: this example would create keys of the form "redislayer:example:*" in your redis database
-//	of course you can easily delete these keys with the linux command: redis-cli keys "redislayer:*" | xargs redis-cli del
+//	of course you can easily delete these keys with the linux commands:
+//	- redis-cli -p 6379 keys "redislayer:*" | xargs redis-cli -p 6379 del
+//	- redis-cli -p 6380 keys "redislayer:*" | xargs redis-cli -p 6380 del
 
 var rl = require('./redislayer');
 var dtree = require('./dtree');
@@ -9,9 +11,10 @@ var clist = require('./clist');			// requires redis running on ports 6379 and 63
 var async = require('async');
 
 
-// SETUP
-//rl.loadClusterList({clist:clist});		// already done by dtree
-rl.loadDatatypeTree({dtree:dtree});		// load datatype tree
+// SETUP: check dtree.js for info on configuration
+
+//rl.loadClusterList({clist:clist});		// load list of clusters; already done in dtree.js
+//rl.loadDatatypeTree({dtree:dtree});		// load datatype tree; already done in dtree.js
 rl.setDefaultClusterId(1000);			// set default cluster for this instance of redislayer
 
 
@@ -79,15 +82,37 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 		if(err){
 			err = 'Oops! createEntities '+err;
 		}else{
-			console.log('---- '+entity_type+' added ----');
+			console.log('#### '+entity_type+' added ####');
 		}
 		then(err);
 	});
 };
 
+// helper for printing errors and results
+oopsCaseErrorResult = function(mycase, err, result, logResult){
+	if(err || result.code != 0){
+		err = 'Oops! '+mycase+': '+err;
+	}else if(logResult){
+		console.log(result.data);
+	}
+	return err;
+};
+
+
+
+
+var numberOfUsers = 1000;
+var numberOfGroups = 1000;
+var membershipCycles = 100;
+var 	range7 = null,
+	range8 = null,
+	attr7 = null,
+	attr8 = null,
+	rangePartitions = null,
+	joinConfig = null;
 
 // aside: using this method with async.whilst and switch statement in order to sequence the next operations
-var sequence = 0;
+var sequence = 3;			// (case number to start from) - 1
 var isNotComplete = true;
 async.whilst(
 function(){return isNotComplete;},
@@ -104,7 +129,7 @@ case 1: // add some users
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	var users = [];
-	for(var i=1; i <= 100; i++){
+	for(var i=1; i <= numberOfUsers; i++){
 		users.push({
 			firstnames: 'first name',
 			lastnames: 'last name',
@@ -132,7 +157,7 @@ case 2: // add some groups
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	var groups = [];
-	for(var i=1; i <= 100; i++){
+	for(var i=1; i <= numberOfGroups; i++){
 		groups.push({
 			firstnames: 'group name',
 			comment: 'group_comment',
@@ -158,12 +183,13 @@ case 3: // add some memberships
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- (NB: for UID of struct=zset, a padding is made for numeric values inorder to maintain the numeric sorting)
 	//	- note the keysuffixes and the keychain formed by suffixing the key
+	//	#### note that different keychains have been routed into different clusters 
 	//	- note how the Redis-Score is built from the values of the [factors] prop of the config
 	
 	// user-ids and group-ids have been stowed into redis sets during creation
 	// user srandmember command to select a random number of groups and users and create membership between them
 	// repeat till enough memberships are created
-	var cycles = Array(10);
+	var cycles = Array(membershipCycles);
 	async.each(cycles, function(cyc, cb){
 		var arg = {	cmd: myUserSetKey.getCommand().randmember,
 				key: myUserSetKey,
@@ -209,7 +235,7 @@ case 3: // add some memberships
 		if(err){
 			err = 'Oops! case3 '+err;
 		}else{
-			console.log('---- memberships added ----');
+			console.log('#### memberships added ####');
 		}
 		callback(err);
 	});
@@ -220,37 +246,29 @@ case 3: // add some memberships
 // EXERCISE: test if redislayer the config info to return the stored objects
 
 case 4:
-	console.log('---- query for an existing object ----');
+	console.log('#### query for an existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
 			indexorrange: {entityid:999188000, firstnames:null}};	// field-branches are searched only if their property exist
 	rl.singleIndexQuery(arg, function(err, result){
-		if(err || result.code != 0){
-			err = 'Oops! case4: '+err;
-		}else{
-			console.log(result.data);
-		}
+		err = oopsCaseErrorResult('case4', err, result, true);
 		callback(err);
 	});
 	break;
 case 5:
-	console.log('---- query for a non-existing object ----');
+	console.log('#### query for a non-existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
 			indexorrange: {entityid:555188000, firstnames:null, lastnames:null}};
 	rl.singleIndexQuery(arg, function(err, result){
-		if(err || result.code != 0){
-			err = 'Oops! case5: '+err;
-		}else{
-			console.log(result.data);
-		}
+		err = oopsCaseErrorResult('case5', err, result, true);
 		callback(err);
 	});
 	break;
 case 6:
-	console.log('---- query for existing and non-existing objects ----');
+	console.log('#### query for existing and non-existing objects ####');
 	var key = rl.getKey().hkey_user;
 	var indexList = [	{index:{entityid: 999188000, firstnames:null, lastnames:null}},
 				{index:{entityid: 999118000, firstnames:null, lastnames:null}},
@@ -266,42 +284,104 @@ case 6:
 			key: key,
 			indexlist: indexList};
 	rl.indexListQuery(arg, function(err, result){
-		if(err || result.code != 0){
-			err = 'Oops! case6: '+err;
-		}else{
-			console.log(result.data);
-		}
+		err = oopsCaseErrorResult('case6', err, result, true);
 		callback(err);
 	});
 	break;
 
 // rangers
 
+// EXERCISE: note that ranging can potentially be across partitions, key-chains and clusters
+//	- note how the range-properties are used to configure the range-index
+//	- note how range partitions are specified
+//	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
+
 case 7:
-	// query for an existing object - based on multiple fields
+	console.log('#### range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
+	rangePartitions = function rangePartitions(mycase, type, cursor, attribute, cb){
+		var key = rl.getKey().zkey_membership;
+		// redislayer will figure out variant of range to use (rangebyscore/rangebylex/etc)
+		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
+		var cmd = key.getCommand()[type];
+		var arg = {	cmd: cmd,
+				key: key,
+				indexorrange: cursor,
+				attribute:attribute,
+				};
+		rl.singleIndexQuery(arg, function(err, result){
+			var logResult = mycase == 'case7' || mycase == 'case8';
+			err = oopsCaseErrorResult(mycase, err, result, logResult);
+			cb(err, result);
+		});
+	};
+	var index = {	isadmin: [0,1],			// range across partitions
+			entityid: 9991952000,
+			memberid: 99918000};
+	range7 = new rl.rangeConfig(index);
+	// the startProp and stopProp basically says we want members of the entityid=9991952000
+	range7.startProp = 'entityid';
+	range7.stopProp = 'entityid';
+	range7.boundValue = null;
+	range7.excludeCursor = false;
+	attr7 = {limit:30, withscores:true};		// the isadmin property is in the score
+	rangePartitions('case7', 'rangeasc', range7, attr7, callback);
 	break;
 case 8:
-	// query for a non-existing object - based on multiple fields
+	console.log('#### range on just a single partition ####');
+	var index = {	isadmin: 0,			// range single partition
+			entityid: 9991952000,
+			memberid: 99918000};
+	range8 = new rl.rangeConfig(index);
+	// the startProp and stopProp basically says we want members of the entityids from 9991952000 to 9991990000
+	range8.startProp = 'entityid';
+	range8.stopProp = 'entityid';
+	range8.boundValue = 9991990000;
+	range8.excludeCursor = false;
+	attr8 = {limit:30, withscores:true};
+	rangePartitions('case8', 'rangeasc', range8, attr8, callback);
 	break;
-case 9:
-	// query for existing and non-existing objects
-	break;
-/*
+
 // mergers
 
-case 7:
-	// query for an existing object - based on multiple fields
-	break;
-case 8:
-	// query for a non-existing object - based on multiple fields
-	break;
 case 9:
-	// query for existing and non-existing objects
+	console.log('#### inner-join the ranges from case 7 and 8 ####');
+	var case7Stream = new rl.streamConfig();
+	case7Stream.func = rangePartitions;
+	case7Stream.args = ['case{9,10}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
+	case7Stream.namespace = 'case7';				// namespacing no necessary here since streams have equivalent fields
+	case7Stream.jointMap = null;
+	case7Stream.cursorIndex = 2;
+	case7Stream.attributeIndex = 3;
+	var case8Stream = new rl.streamConfig();
+	case8Stream.func = rangePartitions;
+	case8Stream.args = ['case{9,10}', 'rangeasc', range8, attr8];
+	case8Stream.namespace = 'case8';
+	case8Stream.jointMap = null;
+	case8Stream.cursorIndex = 2;
+	case8Stream.attributeIndex = 3;
+	joinConfig = new rl.joinConfig();
+	joinConfig.setInnerjoin();
+	joinConfig.setOrderAsc();					// NB: this matches the range direction of the streams
+	joinConfig.setModeList();
+	joinConfig.streamConfigs = [case7Stream, case8Stream];
+	joinConfig.joints = ['memberid', 'entityid'];			// order is irrelevant; redislayer knows better from key-configs
+	joinConfig.limit = 10;						// NB: this is even useful in case of modeCount()
+	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
+		err = oopsCaseErrorResult('case9', err, result, true);
+		callback(err);
+	});
+	break;
+case 10:
+	console.log('#### full-join the ranges from case 7 and 8 ####');
+	joinConfig.setFulljoin();
+	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
+		err = oopsCaseErrorResult('case10', err, result, true);
+		callback(err);
+	});
 	break;
 
-// migrants
+// TODO migrants
 
-*/
 default:
 	isNotComplete = false;
 	callback(null);		// sequence complete
@@ -309,10 +389,10 @@ default:
 },
 function(err){
 	if(!err){
-		console.log("---- That's all folks! ----");
+		console.log("#### That's all folks! ####");
 	}else{
 		console.log(err);
-		console.log("---- please submit a pull-request to fix the error ----");
+		console.log("#### please submit a pull-request to fix the error ####");
 	}
 });	
 

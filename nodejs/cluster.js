@@ -10,11 +10,6 @@ var cluster = {
 var access_code = 'cluster._do_not_access_fields_with_this';
 
 
-var unwrap = function unwrap(caller){
-        return caller(access_code);
-};
-
-
 var clusterList = {};
 
 cluster.getDefaultId = function getDefaultClusterId(){

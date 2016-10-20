@@ -1,6 +1,6 @@
 var utils = {};
 
-utils.shallowCopy = function(myDict){
+utils.shallowCopy = function shallowCopy(myDict){
 	var myClone = {};
 	for(var key in (myDict || {})){
 		myClone[key] = myDict[key];
@@ -9,7 +9,7 @@ utils.shallowCopy = function(myDict){
 };
 
 
-isObjectEmpty = function(obj) {
+utils.isObjectEmpty = function isObjectEmpty(obj) {
 	for (var prop in obj){
 		if(obj.hasOwnProperty(prop)){
 			return false;
@@ -18,27 +18,27 @@ isObjectEmpty = function(obj) {
 	return true;
 };
 
-utils.logError = function(err, message){
+utils.logError = function logError(err, message){
 	if(err){
-		console.error('%s, %s',message, err);
+		//console.error('%s, %s',message, err);
 		return true;
 	} else{
 		return false;
 	}
 }
 
-utils.logCodeError = function(err, result){
+utils.logCodeError = function logCodeError(err, result){
 	if(err || !result || result.code != 0){
 		return true;
 	}
 	return false;
 }
 
-utils.startsWith = function(str, prefix){
+utils.startsWith = function startsWith(str, prefix){
 	return (str != null ? str.lastIndexOf(prefix, 0) === 0 : null);
 }
 
-utils.isInt = function(val){
+utils.isInt = function isInt(val){
 	var digits = [0,1,2,3,4,5,6,7,8,9];
 	for(var i=0; i < (val || '').length; i++){
 		if(digits[val[i]] == null){
@@ -63,10 +63,10 @@ utils.isInt = function(val){
 		},
 	}
 */
-utils.wrap = function(dict, store, access_code, curr_type_id, prev_type_id, prev_instance, force){
+utils.wrap = function wrap(dict, store, access_code, curr_type_id, prev_type_id, prev_instance, force){
 	var methods = dict[access_code] || [];				// {_all: [], key1: [], ...}
 	var api = store.api;						// NB: may already hold existing APIs
-	if(!force && !isObjectEmpty(api)){
+	if(!force && !utils.isObjectEmpty(api)){
 		return api;
 	}
 	if(typeof dict === 'object' && !Array.isArray(dict)){

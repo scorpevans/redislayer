@@ -2,6 +2,7 @@
 * allow separate configs per field-branch
 * logging and log-levels
 * buildConfigLookup(config): change most of the functions to lookups, by examining configs onload
+	also move command properties into command-dict: {, property{ismulti:true, isreader:false, requireuid:true, ..}}
 * include other cluster types
 * refactor
 * one-to-many joins
