@@ -112,13 +112,27 @@ var 	range7 = null,
 	joinConfig = null;
 
 // aside: using this method with async.whilst and switch statement in order to sequence the next operations
-var sequence = 3;			// (case number to start from) - 1
+var sequence = -1;
+//comment out unwanted cases
+var cases = [];
+//cases.push(1);
+//cases.push(2);
+//cases.push(3);
+//cases.push(4);
+//cases.push(5);
+cases.push(6);
+//cases.push(7);
+//cases.push(8);
+//cases.push(9);
+//cases.push(10);
+
 var isNotComplete = true;
+
 async.whilst(
 function(){return isNotComplete;},
 function(callback){
 sequence++;
-switch(sequence){
+switch(cases[sequence]){
 
 // setters
 
@@ -128,6 +142,8 @@ case 1: // add some users
 	//	- note that user id/details are made on redis6380
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
+	
+	console.log('#### CASE 1: add users ####');
 	var users = [];
 	for(var i=1; i <= numberOfUsers; i++){
 		users.push({
@@ -156,6 +172,8 @@ case 2: // add some groups
 	//	- note that group id/details are made on redis6379; different cluster from the user id/details
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
+	
+	console.log('#### CASE 2: add groups ####');
 	var groups = [];
 	for(var i=1; i <= numberOfGroups; i++){
 		groups.push({
@@ -185,10 +203,11 @@ case 3: // add some memberships
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	//	#### note that different keychains have been routed into different clusters 
 	//	- note how the Redis-Score is built from the values of the [factors] prop of the config
-	
 	// user-ids and group-ids have been stowed into redis sets during creation
 	// user srandmember command to select a random number of groups and users and create membership between them
 	// repeat till enough memberships are created
+	
+	console.log('#### CASE 3: add memberships ####');
 	var cycles = Array(membershipCycles);
 	async.each(cycles, function(cyc, cb){
 		var arg = {	cmd: myUserSetKey.getCommand().randmember,
@@ -246,7 +265,7 @@ case 3: // add some memberships
 // EXERCISE: test if redislayer the config info to return the stored objects
 
 case 4:
-	console.log('#### query for an existing object ####');
+	console.log('#### CASE 4: query for an existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
@@ -257,7 +276,7 @@ case 4:
 	});
 	break;
 case 5:
-	console.log('#### query for a non-existing object ####');
+	console.log('#### CASE 5: query for a non-existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
@@ -268,7 +287,7 @@ case 5:
 	});
 	break;
 case 6:
-	console.log('#### query for existing and non-existing objects ####');
+	console.log('#### CASE 6: query for existing and non-existing objects ####');
 	var key = rl.getKey().hkey_user;
 	var indexList = [	{index:{entityid: 999188000, firstnames:null, lastnames:null}},
 				{index:{entityid: 999118000, firstnames:null, lastnames:null}},
@@ -297,7 +316,7 @@ case 6:
 //	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
 
 case 7:
-	console.log('#### range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
+	console.log('#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
 	rangePartitions = function rangePartitions(mycase, type, cursor, attribute, cb){
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out variant of range to use (rangebyscore/rangebylex/etc)
@@ -327,7 +346,8 @@ case 7:
 	rangePartitions('case7', 'rangeasc', range7, attr7, callback);
 	break;
 case 8:
-	console.log('#### range on just a single partition ####');
+case 9:
+case 10:
 	var index = {	isadmin: 0,			// range single partition
 			entityid: 9991952000,
 			memberid: 99918000};
@@ -338,13 +358,14 @@ case 8:
 	range8.boundValue = 9991990000;
 	range8.excludeCursor = false;
 	attr8 = {limit:30, withscores:true};
-	rangePartitions('case8', 'rangeasc', range8, attr8, callback);
-	break;
+	if(cases[sequence] == 8){
+		console.log('#### CASE 8: range on just a single partition ####');
+		rangePartitions('case8', 'rangeasc', range8, attr8, callback);
+		break;
+	}
 
 // mergers
 
-case 9:
-	console.log('#### inner-join the ranges from case 7 and 8 ####');
 	var case7Stream = new rl.streamConfig();
 	case7Stream.func = rangePartitions;
 	case7Stream.args = ['case{9,10}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
@@ -366,13 +387,16 @@ case 9:
 	joinConfig.streamConfigs = [case7Stream, case8Stream];
 	joinConfig.joints = ['memberid', 'entityid'];			// order is irrelevant; redislayer knows better from key-configs
 	joinConfig.limit = 10;						// NB: this is even useful in case of modeCount()
-	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
-		err = oopsCaseErrorResult('case9', err, result, true);
-		callback(err);
-	});
-	break;
-case 10:
-	console.log('#### full-join the ranges from case 7 and 8 ####');
+	if(cases[sequence] == 9){
+		console.log('#### CASE 9: inner-join the ranges from case 7 and 8 ####');
+		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
+			err = oopsCaseErrorResult('case9', err, result, true);
+			callback(err);
+		});
+		break;
+	}
+	
+	console.log('#### CASE 10: full-join the ranges from case 7 and 8 ####');
 	joinConfig.setFulljoin();
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 		err = oopsCaseErrorResult('case10', err, result, true);

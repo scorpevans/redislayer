@@ -34,7 +34,7 @@ query.rangeConfig = function queryRangeConfig(index){
 	this.cursorMatchOffset = null;	// in case of joins, used to specify amount of already returned values which match the cursor position 
 	var that = this;
 	this.clone = function cloneRangeConfig(){
-		var rc = new query.rangeConfig(utils.shallowCopy(that.index));
+		var rc = new query.rangeConfig(that.index);
 		rc.startProp = that.startProp;
 		rc.stopProp = that.stopProp;
 		rc.boundValue = that.boundValue;
@@ -271,10 +271,10 @@ getIndexFieldBranches = function getQueryIndexFieldBranches(config, index){
 	}
 	return fieldBranches;
 };
-parseStorageAttributesToIndex = function parseQueryStorageAttributesToIndex(cluster_instance_type, cmd, key, keyText, xid, uid){
+parseStorageAttributesToIndex = function parseQueryStorageAttributesToIndex(cluster_instance_type, cmd, key, keyText, xid, uid, field_branch){
 	switch(cluster_instance_type){
 	default:
-		return queryRedis.parseStorageAttributesToIndex(cmd, key, keyText, xid, uid)
+		return queryRedis.parseStorageAttributesToIndex(cmd, key, keyText, xid, uid, field_branch)
 	}
 }
 getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
@@ -295,27 +295,27 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 		var cache = {storageAttr:{}, clusterInstance:{}, clusterInstanceId:{}};
 		// process different field-branches; vertical partitioning
 		for(j=0; j < fieldBranches.length; j++){
-			var field = fieldBranches[j];
-			var clusterInstance = cache.clusterInstance[field];
+			var fieldBranch = fieldBranches[j];
+			var clusterInstance = cache.clusterInstance[fieldBranch];
 			if(clusterInstance == null){
-				clusterInstance = getQueryDBInstance(original_cmd, keys, index, field);
-				cache.clusterInstance[field] = clusterInstance;
+				clusterInstance = getQueryDBInstance(original_cmd, keys, index, fieldBranch);
+				cache.clusterInstance[fieldBranch] = clusterInstance;
 			}
-			var clusterInstanceId = cache.clusterInstanceId[field];
+			var clusterInstanceId = cache.clusterInstanceId[fieldBranch];
 			if(clusterInstanceId == null){
 				clusterInstanceId = cluster.getInstanceId(clusterInstance);
-				cache.clusterInstanceId[field] = clusterInstanceId;
+				cache.clusterInstanceId[fieldBranch] = clusterInstanceId;
 			}
-			var fsa = cache.storageAttr[field];
+			var fsa = cache.storageAttr[fieldBranch];
 			if(fsa == null){
 				switch(cluster.getInstanceType(clusterInstance)){
 				default:
 					var storageAttr = queryRedis.parseIndexToStorageAttributes(key, original_cmd, index);
-					fsa = storageAttr[field];
+					fsa = storageAttr[fieldBranch];
 					cache.storageAttr = storageAttr;	// returns already dict of all fields
 				}
 			}
-			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstance, original_cmd, keys, index, rangeConfig, attribute, field, fsa);
+			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstance, original_cmd, keys, index, rangeConfig, attribute, fieldBranch, fsa);
 			
 			// bulk up the different key-storages for bulk-execution
 			var keyText = dbInstanceArgs.keytext;
@@ -325,7 +325,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 			if(!instanceKeySet[clusterInstanceId]._keytext[keyText]){
 				instanceKeySet[clusterInstanceId]._keytext[keyText] = {};
 				instanceKeySet[clusterInstanceId]._keytext[keyText].attribute = attribute;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].field = field;
+				instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranch = fieldBranch;
 				instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes = fsa.keySuffixes;
 				instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount = fieldBranches.length;
 				instanceKeySet[clusterInstanceId]._keytext[keyText].cmd = dbInstanceArgs.command;
@@ -346,14 +346,14 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 		var ks = Object.keys(instanceKeySet[clusterInstanceId]._keytext);
 		async.each(ks, function(keyText, cb){
 			var newKeys = instanceKeySet[clusterInstanceId]._keytext[keyText].newKeys;
-			var field = instanceKeySet[clusterInstanceId]._keytext[keyText].field;
+			var fieldBranch = instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranch;
 			var keySuffixes = instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes;
 			var fieldBranchCount = instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount;
 			var cmd = instanceKeySet[clusterInstanceId]._keytext[keyText].cmd;
 			var index = instanceKeySet[clusterInstanceId]._keytext[keyText].index;
 			var args = instanceKeySet[clusterInstanceId]._keytext[keyText].args;
 			var attribute = instanceKeySet[clusterInstanceId]._keytext[keyText].attribute;
-			queryDBInstance(clusterInstance, cmd, keys, keyConfig, field, keySuffixes, index, args, attribute, function(err, result){
+			queryDBInstance(clusterInstance, cmd, keys, keyConfig, fieldBranch, keySuffixes, index, args, attribute, function(err, result){
 				// POST-PROCESS
 				if(!utils.logCodeError(err, result)){
 					var clusterInstanceType = cluster.getInstanceType(clusterInstance);
@@ -385,7 +385,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 								uid = args[i];		// TODO generally, how so?? think a bit about this!
 							}
 							// TODO optimize: detail.field is computed multiples time in the FOR-loop
-							detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid);
+							detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, fieldBranch);
 							// querying field-branches can result in separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var fuid = detail.fuid;
@@ -433,7 +433,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 						if(utils.startsWith(command.getType(cmd), 'get')){
 							resultType = 'object';
 							var uid = args[0];
-							var detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid);
+							var detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, fieldBranch);
 							// querying field-branches can result is separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var field = detail.field;

@@ -235,10 +235,26 @@ removePaddingFromZsetUID = function removePaddingFromZsetUID(val){
 	return val;
 };
 
+getFieldBranchFUID = function getFieldBranchFUID(fieldIndex, keyLabel, mySuffixCount, keyParts, fkeyPartIndexes, uidParts, fuidPartIndexes){
+	// create a unique id across all field-branch keys in order to unify records across the branched calls
+	// keyLabel and any admissible non-field-branch field should make contributions towards this
+	// hence, just subtract field-branch contributions to the <keyText> and <uid> arguments
+	var neutralKeyParts = keyParts.slice(0-mySuffixCount);
+	if(fkeyPartIndexes[fieldIndex] != null){
+		neutralKeyParts.splice(fkeyPartIndexes[fieldIndex], 1);
+	}
+	var neutralUIDParts = uidParts.concat([]);
+	if(fuidPartIndexes[fieldIndex] != null){
+		neutralUIDParts.splice(fuidPartIndexes[fieldIndex], 1);
+	}
+	var fuid = [keyLabel].concat(neutralKeyParts).concat(neutralUIDParts).join(separator_key);
+	return fuid;
+};
+
 // TODO most of the computations on configs could be cached in redislayer to reduce parse computations
 // NB: the uid here may be synthetic i.e. the raw input for the query
 //	in the case of no query results, synthetic values help fix other properties e.g. fuid
-query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributesToIndex(cmd, key, key_text, xid, uid){
+query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributesToIndex(cmd, key, key_text, xid, uid, field_branch){
 	// NB: if <xid> is null, <uid> still has to be parsed
 	var index = {};
 	var fld = null;
@@ -252,8 +268,32 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 	var keyParts = key_text.split(separator_key);
 	var uidParts = (uid != null ? String(uid).split(separator_detail) : []);
 	var xidParts = (xid != null ? String(xid).split(separator_detail) : []);
-	var fuidPartIndexes = null;
-	var fkeyPartIndexes = null;
+	// TODO this caching should be done once onload of configs
+	// make cache of info to be used
+	var keySuffixCount = 0;
+	var uidPrependCount = 0;
+	var fuidPartIndexes = [];	// fkeyPartIndexes[j] = number of uidPrepends preceding fieldIndex-j
+	var fkeyPartIndexes = [];	// fkeyPartIndexes[j] = number of keySuffixes preceding fieldIndex-j
+	if(field_branch != null){
+		for(var j=0; j < fields.length; j++){
+			// other field-branches are not involved since they are stored separately
+			// for now all field-branches are excluded, and conditionally added later
+			// this is because this code-path runs only once and a cached value is used thereafter
+			if(datatype.isConfigFieldKeySuffix(keyConfig, j)){
+				fkeyPartIndexes[j] = keySuffixCount;
+				if(!datatype.isConfigFieldBranch(keyConfig, j)){
+					keySuffixCount++;
+				}
+			}
+			if(datatype.isConfigFieldUIDPrepend(keyConfig, j)){
+				fuidPartIndexes[j] = uidPrependCount;
+				if(!datatype.isConfigFieldBranch(keyConfig, j)){
+					uidPrependCount++;
+				}
+			}
+		}
+	}
+
 	// if a get-command doesn't have an XID, no result should be returned
 	// this is handled specially since otherwise index={...} will be returned instead of a NULL
 	// 	since at least one field can be constructed with the input key_text/xid/uid
@@ -264,66 +304,24 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 		var type = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
 		var fieldOffset = offsets[fieldIndex];
 		if(datatype.isConfigFieldBranch(keyConfig, fieldIndex)){
-			// TODO this caching could be done once onload of configs
-			// make cache of info to be used
-			if(fkeyPartIndexes == null){
-				var keySuffixCount = 0;
-				var uidPrependCount = 0;
-				fuidPartIndexes = [];	// fkeyPartIndexes[j] = number of uidPrepends preceding fieldIndex-j
-				fkeyPartIndexes = [];	// fkeyPartIndexes[j] = number of keySuffixes preceding fieldIndex-j
-				for(var j=0; j < fields.length; j++){
-					// other field-branches are not involved since they are stored separately
-					// for now all field-branches are excluded, and conditionally added later
-					// this is because this code-path runs only once and a cached value is used thereafter
-					if(datatype.isConfigFieldKeySuffix(keyConfig, j)){
-						fkeyPartIndexes[j] = keySuffixCount;
-						if(!datatype.isConfigFieldBranch(keyConfig, j)){
-							keySuffixCount++;
-						}
-					}
-					if(datatype.isConfigFieldUIDPrepend(keyConfig, j)){
-						fuidPartIndexes[j] = uidPrependCount;
-						if(!datatype.isConfigFieldBranch(keyConfig, j)){
-							uidPrependCount++;
-						}
-					}
-				}
-			}
-			// check if string at the leftmost end of keyPrefixes matches this field; if not skip this field
 			// NB: field-branch value itself (i.e. apart from the property) could count towards keySuffixes
 			var mySuffixCount = keySuffixCount + (datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex) ? 1 : 0);
-			var keyPrefix = [keyLabel, field].join(separator_key);
-			if(keyPrefix != keyParts.slice(0, 0 - mySuffixCount).join(separator_key)){
+			if(field_branch != field){
 				continue;
 			}else{
-				fld = field;
-				// create a unique id across all field-branch keys in order to unify records across the branched calls
-				// NB: see discussion in dtree.js about the need to have or UID fields besides field-branches
-				// keyLabel and any non-field-branch field which passes should make contributions towards this
-				// hence, just subtract field-branch contributions to the <keyText> and <uid> arguments
-				var neutralKeyParts = keyParts.slice(0-mySuffixCount)
-				if(fkeyPartIndexes[fieldIndex] != null){
-					neutralKeyParts.splice(fkeyPartIndexes[fieldIndex], 1);
-				}
-				var neutralUIDParts = uidParts.concat([]);
-				if(fuidPartIndexes[fieldIndex] != null){
-					neutralUIDParts.splice(fuidPartIndexes[fieldIndex], 1);
-				}
-				fuid = [keyLabel].concat(neutralKeyParts).concat(neutralUIDParts).join(separator_key);
-				// every command, whose output is an Index, takes as argument either xid or uid component
-				// if the component the command doesn't require is NULL, the return should be NULL
-				// this is handled specially since otherwise index={...} will be returned instead of a NULL
-				// 	since at least one field can be constructed with the input key_text/xid/uid
+				var fuid = getFieldBranchFUID(fieldIndex, keyLabel, mySuffixCount, keyParts, fkeyPartIndexes, uidParts, fuidPartIndexes);
 				if(noReturn){
-					return {index:null, field:fld, fuid:fuid};
+					return {index:null, field:field, fuid:fuid};
 				}
 			}
 		}else if(noReturn){
-			// every command, whose output is an Index, takes as argument either xid or uid component
-			// if the component the command doesn't require is NULL, the return should be NULL
-			// this is handled specially since otherwise index={...} will be returned instead of a NULL
-			// 	since at least one field can be constructed with the input key_text/xid/uid
-			return {index:null, field:null, fuid:null};
+			var fuid = null;
+			if(field_branch != null){
+				var fbIndex = datatype.getConfigFieldIdx(keyConfig, field_branch);
+				var mySuffixCount = keySuffixCount + (datatype.isConfigFieldKeySuffix(keyConfig, fbIndex) ? 1 : 0);
+				fuid = getFieldBranchFUID(fbIndex, keyLabel, mySuffixCount, keyParts, fkeyPartIndexes, uidParts, fuidPartIndexes);
+			}
+			return {index:null, field:field_branch, fuid:fuid};
 		}
 		if(datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)
 			|| (datatype.isConfigFieldUIDPrepend(keyConfig, fieldIndex) && xid == null)){
@@ -416,7 +414,7 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 			index[field] = parseFloat(index[field], 10);
 		}
 	}
-	return {index:(utils.isObjectEmpty(index) ? null : index), field:fld, fuid:fuid};
+	return {index:(utils.isObjectEmpty(index) ? null : index), field:field_branch, fuid:fuid};
 };
 
 

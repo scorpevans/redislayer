@@ -684,6 +684,7 @@ datatype.getConfigFieldPrefactor = function getDatatypeConfigFieldPrefactor(conf
 };
 
 var label_comparator_prop = '_comparator_prop';
+var label_expression_prop = '_expression_prop';		// joins are currently made only on equality
 datatype.jointMap = function datatypeJointMap(){
 	var jm = {};
 	var myjm = function(key){return (key == access_code ? jm : null);};
@@ -697,11 +698,15 @@ datatype.jointMap = function datatypeJointMap(){
 	return myjm;
 };
 datatype.getJointMapDict = function getDatatypeJointMapDict(joint_map){
-	return (joint_map != null ? unwrap(joint_map) : null);
+	return (joint_map != null ? unwrap(joint_map) : {});
 };
 datatype.getJointMapMask = function getDatatypeJointMapMask(joint_map, prop){
 	var jm = datatype.getJointMapDict(joint_map);
 	return (((jm || {})[prop] || {})[label_comparator_prop] || prop);
+};
+datatype.getJointMapExpression = function getDatatypeJointMapExpression(joint_map, prop){
+	var jm = datatype.getJointMapDict(joint_map);
+	return (((jm || {})[prop] || {})[label_expression_prop]);
 };
 datatype.addJointMapMask = function addDatatypeJointMapMask(joint_map, prop, prop_map){
 	var jm = datatype.getJointMapDict(joint_map);
@@ -724,18 +729,6 @@ datatype.jointOrd = function datatypeJointOrd(){
 	myord.addMask = function(prop, field, config){
 		if(field == null || config == null){
 			throw new Error('joint-ord mask cannot have NULL values');
-		}
-		ord.mask[prop] = ord.mask[prop] || {};
-		ord.mask[prop].config = config;
-		ord.mask[prop].field = field;
-	};
-	// TODO deprecate
-	myord.addMaskFromClone = function(prop, mask){
-		var pm = ord.mask[mask] || {};
-		var field = pm.field,
-			config = pm.config;
-		if(field == null || config == null){
-			throw new Error('the prop ['+mask+'] does not have a valid mask in the joint-ord');
 		}
 		ord.mask[prop] = ord.mask[prop] || {};
 		ord.mask[prop].config = config;
@@ -771,6 +764,15 @@ datatype.addJointOrdMask = function addDatatypeJointOrdMask(joint_ord, fmask, fi
 		joint_ord.addMask(fmask, field, config);
 	}
 };
+datatype.addJointOrdMaskFromClone = function(ord, prop, clone){
+		var cloneProperty = datatype.getJointOrdProp(ord, 'mask')[clone] || {};
+		var field = cloneProperty.field,
+			config = cloneProperty.config;
+		if(field == null || config == null){
+			throw new Error('the prop ['+clone+'] does not have a valid mask in the joint-ord');
+		}
+		datatype.addJointOrdMask(ord, prop, field, config);
+	};
 
 datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
       	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
