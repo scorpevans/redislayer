@@ -483,7 +483,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 		}else{
 			ret.data = (resultset == label_lua_nil ? null : resultset);
 		}
-		ret.keys = keys;	// sometimes this is required in order to examined query results; see e.g. join.joinRange
+		ret.keys = keys;	// sometimes this is required in order to examined query results; see e.g. join.mergeStreams
 		if(!utils.logError(err, 'FATAL: query.getResultSet')){
 			ret.code = 0;
 		}else{
@@ -511,9 +511,9 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
 		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);
-		var keytext = datatype.getJointOrdProp(ord, 'keytext');
-		var score = datatype.getJointOrdProp(ord, 'score');
-		var uid = datatype.getJointOrdProp(ord, 'uid');
+		var keytext = datatype.getOrdProp(ord, 'keytext');
+		var score = datatype.getOrdProp(ord, 'score');
+		var uid = datatype.getOrdProp(ord, 'uid');
 		var startProp = rangeConfig.startProp;
 		var stopProp = rangeConfig.stopProp;
 		var startPropScoreIdx = score.indexOf(startProp);
@@ -610,8 +610,8 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
 					for(var i=0; true; i++){
 						if( i == pcjIndexes.length){
-							i = 0;				// reset cycle
-							if(boundIndex != null){		// return the least index across the partitions during the last cycle
+							i = 0;			// reset cycle
+							if(boundIndex != null){	// return the least index across the partitions during the last cycle
 								mergeData.push(boundIndex);
 								if(mergeData.length >= limit){
 									break;
@@ -631,10 +631,10 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 							continue;
 						}
 						var index = partitionResults[i][idx];
-						var indexJointMap = null;				// same fields; no need for joint_map here
+						var indexJM = null;					// same fields; no need for jointmap here
 						var reln = null;
 						if(boundIndex != null){
-							reln = datatype.getComparison(cmdOrder, null, ord, index, boundIndex, indexJointMap, indexJointMap);
+							reln = datatype.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
 						}
 						if(boundIndex == null || reln == '<'){
 							boundPartition = i;

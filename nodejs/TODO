@@ -1,5 +1,6 @@
-* test
 * allow separate configs per field-branch
+* error-classes
+* test
 * logging and log-levels
 * buildConfigLookup(config): change most of the functions to lookups, by examining configs onload
 	also move command properties into command-dict: {, property{ismulti:true, isreader:false, requireuid:true, ..}}

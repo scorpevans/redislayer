@@ -1,12 +1,12 @@
-A redis-inspired query adapter for interacting transparently with your heterogeneous data layer.
+Redislayer makes development on your data layer easy, fast and pleasurable!
 
-## Motivation - transparency atop heterogeneity
+## Motivation - ORM, query engine ... transparency atop heterogeneity
 1. storage :- use a standard configuration to define how and where to store/retrieve data objects on heterogeneous databases
 2. query :- use a standard directive to talk to heterogenous databases, and receive a standard result
 3. cluster :- interact with just a single endpoint, instead of separately to tons of databases
 
 ## Framework
-Due to it's primitive storages, Redis API is a suitable entry point to interact with other more abstract databases. With Redislayer you can just speak Redis, and trust that nearly loss-less translations are made to other databases.
+Due to it's primitive storages, the Redis API is a suitable entry point to interact with more abstract, for example SQL, databases. With Redislayer you can just speak Redis, and trust that nearly loss-less translations (in storage schema) are made to other databases.
 
 Redislayer allows the user to list the available database locations and types, and to configure how/where data should be stored/retrieved. Having done this, the user just has to query redislayer with standardized commands; redislayer takes care of the processing and returns a standardized resultset to the user.
 

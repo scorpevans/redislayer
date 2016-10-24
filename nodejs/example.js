@@ -1,5 +1,5 @@
 
-// NB: compliment this examples here with the documentation in redislayer.js
+// NB: compliment these examples with the documentation in redislayer.js
 // WARNING: this example would create keys of the form "redislayer:example:*" in your redis database
 //	of course you can easily delete these keys with the linux commands:
 //	- redis-cli -p 6379 keys "redislayer:*" | xargs redis-cli -p 6379 del
@@ -11,7 +11,7 @@ var clist = require('./clist');			// requires redis running on ports 6379 and 63
 var async = require('async');
 
 
-// SETUP: check dtree.js for info on configuration
+// SETUP: check dtree.js for info on storage configuration used
 
 //rl.loadClusterList({clist:clist});		// load list of clusters; already done in dtree.js
 //rl.loadDatatypeTree({dtree:dtree});		// load datatype tree; already done in dtree.js
@@ -24,7 +24,9 @@ rl.setDefaultClusterId(1000);			// set default cluster for this instance of redi
 // and migration is just a function call
 
 
-// create an unbounded (it would not be loaded into Redislayer) utility Config/Key to help stow IDs into a Redis set
+// helper functions and objects to insert sample data
+
+// create an unbounded (it would NOT be loaded into Redislayer) utility Config/Key to help stow IDs into a Redis set
 // this collection would help to easily create memberships 
 var indexConfig = {	fields:['uid', 'xid'],
 			offsetprependsuid:[true],
@@ -115,16 +117,16 @@ var 	range7 = null,
 var sequence = -1;
 //comment out unwanted cases
 var cases = [];
-//cases.push(1);
-//cases.push(2);
-//cases.push(3);
-//cases.push(4);
-//cases.push(5);
+cases.push(1);
+cases.push(2);
+cases.push(3);
+cases.push(4);
+cases.push(5);
 cases.push(6);
-//cases.push(7);
-//cases.push(8);
-//cases.push(9);
-//cases.push(10);
+cases.push(7);
+cases.push(8);
+cases.push(9);
+cases.push(10);
 
 var isNotComplete = true;
 
@@ -134,7 +136,7 @@ function(callback){
 sequence++;
 switch(cases[sequence]){
 
-// setters
+// SETTERS
 
 case 1: // add some users
 	
@@ -154,7 +156,7 @@ case 1: // add some users
 	};
 
 	var idKey = rl.getKey().skey_userid;
-	var idIndex = {increment: 2000};		// this aligns with the index defined for skey_userid
+	var idIndex = {increment: 2000};		// the fields of Indexes aligns with the defined configuration
 	var idArg = {
 		cmd: idKey.getCommand().incrby,		// using the Key is the recommended route to an assigned commandset
 		key: idKey,
@@ -183,9 +185,9 @@ case 2: // add some groups
 	};
 	
 	var idKey = rl.getKey().hkey_entityid;
-	var idIndex = {entitytype:'groupid' ,increment: 2000};	// this aligns with the index defined for skey_userid
+	var idIndex = {entitytype:'groupid' ,increment: 2000};
 	var idArg = {
-		cmd: idKey.getCommand().incrby,			// using the Key is the recommended route to an assigned commandset
+		cmd: idKey.getCommand().incrby,
 		key: idKey,
 		indexorrange: idIndex,
 		attribute: null};
@@ -203,10 +205,10 @@ case 3: // add some memberships
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	//	#### note that different keychains have been routed into different clusters 
 	//	- note how the Redis-Score is built from the values of the [factors] prop of the config
+
 	// user-ids and group-ids have been stowed into redis sets during creation
-	// user srandmember command to select a random number of groups and users and create membership between them
-	// repeat till enough memberships are created
-	
+	// use srandmember command to select a random number of groups and users and create membership between them
+	// repeat till enough memberships are created	
 	console.log('#### CASE 3: add memberships ####');
 	var cycles = Array(membershipCycles);
 	async.each(cycles, function(cyc, cb){
@@ -260,9 +262,9 @@ case 3: // add some memberships
 	});
 	break;
 
-// getters
+// GETTERS
 
-// EXERCISE: test if redislayer the config info to return the stored objects
+// EXERCISE: test if redislayer is able to use the config info to return the stored objects
 
 case 4:
 	console.log('#### CASE 4: query for an existing object ####');
@@ -289,6 +291,7 @@ case 5:
 case 6:
 	console.log('#### CASE 6: query for existing and non-existing objects ####');
 	var key = rl.getKey().hkey_user;
+				// non- 999 prefixes don't exist; non-000 suffixes don't exist
 	var indexList = [	{index:{entityid: 999188000, firstnames:null, lastnames:null}},
 				{index:{entityid: 999118000, firstnames:null, lastnames:null}},
 				{index:{entityid: 99952000, firstnames:null, lastnames:null}},
@@ -308,18 +311,21 @@ case 6:
 	});
 	break;
 
-// rangers
+// RANGERS
 
 // EXERCISE: note that ranging can potentially be across partitions, key-chains and clusters
 //	- note how the range-properties are used to configure the range-index
 //	- note how range partitions are specified
 //	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
+//	- note the possible inclusions of the [keys] and [jointMap] fields to resultsets for later joins
 
 case 7:
-	console.log('#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
+case 8:
+case 9:
+case 10:
 	rangePartitions = function rangePartitions(mycase, type, cursor, attribute, cb){
 		var key = rl.getKey().zkey_membership;
-		// redislayer will figure out variant of range to use (rangebyscore/rangebylex/etc)
+		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
 		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
 		var cmd = key.getCommand()[type];
 		var arg = {	cmd: cmd,
@@ -330,10 +336,20 @@ case 7:
 		rl.singleIndexQuery(arg, function(err, result){
 			var logResult = mycase == 'case7' || mycase == 'case8';
 			err = oopsCaseErrorResult(mycase, err, result, logResult);
+			// joins require info on the sorting order of resultset
+			// hence all resultsets used in joins must have [keys] field of resultset keys
+			// see resultsetCallback in redislayer.js for info in case the resultset doesn't come from redislayer
+			//result.keys = [key];		// already included with redislayer queries
+			// let's be nice and add a jointmap to the resultset
+			// this is the way to standardize fields for callers who use this function as a join-stream
+			// the other way is that the callers themselves provide a jointmap when joining
+			var jointMap = new rl.jointMap();
+			jointMap.addMaskToField('groupid', 'entityid');
+			result.jointMap = jointMap;
 			cb(err, result);
 		});
 	};
-	var index = {	isadmin: [0,1],			// range across partitions
+	var index = {	isadmin: [0,1],			// merge multiple partitions
 			entityid: 9991952000,
 			memberid: 99918000};
 	range7 = new rl.rangeConfig(index);
@@ -342,51 +358,56 @@ case 7:
 	range7.stopProp = 'entityid';
 	range7.boundValue = null;
 	range7.excludeCursor = false;
-	attr7 = {limit:30, withscores:true};		// the isadmin property is in the score
-	rangePartitions('case7', 'rangeasc', range7, attr7, callback);
-	break;
+	attr7 = {limit:20, withscores:true};		// withscores since the isadmin property is in the score
+	if(cases[sequence] == 7){
+		console.log('#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
+		rangePartitions('case7', 'rangeasc', range7, attr7, callback);
+		break;
+	}
+	
 case 8:
-case 9:
-case 10:
+
 	var index = {	isadmin: 0,			// range single partition
 			entityid: 9991952000,
 			memberid: 99918000};
 	range8 = new rl.rangeConfig(index);
-	// the startProp and stopProp basically says we want members of the entityids from 9991952000 to 9991990000
+	// the startProp, stopProp and boundValue, imply we want members of the entityids from 9991952000 to 9991990000
 	range8.startProp = 'entityid';
 	range8.stopProp = 'entityid';
 	range8.boundValue = 9991990000;
 	range8.excludeCursor = false;
-	attr8 = {limit:30, withscores:true};
+	attr8 = {limit:20, withscores:true};
 	if(cases[sequence] == 8){
 		console.log('#### CASE 8: range on just a single partition ####');
 		rangePartitions('case8', 'rangeasc', range8, attr8, callback);
 		break;
 	}
 
-// mergers
+// MERGERS
+
+case 9:
 
 	var case7Stream = new rl.streamConfig();
 	case7Stream.func = rangePartitions;
 	case7Stream.args = ['case{9,10}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
-	case7Stream.namespace = 'case7';				// namespacing no necessary here since streams have equivalent fields
-	case7Stream.jointMap = null;
+	case7Stream.namespace = null;					// namespacing not necessary here since streams have equivalent fields
+	case7Stream.jointMap = null;					// not required since both join-streams have the same field-names
 	case7Stream.cursorIndex = 2;
 	case7Stream.attributeIndex = 3;
 	var case8Stream = new rl.streamConfig();
 	case8Stream.func = rangePartitions;
 	case8Stream.args = ['case{9,10}', 'rangeasc', range8, attr8];
-	case8Stream.namespace = 'case8';
+	case8Stream.namespace = null;
 	case8Stream.jointMap = null;
 	case8Stream.cursorIndex = 2;
 	case8Stream.attributeIndex = 3;
 	joinConfig = new rl.joinConfig();
 	joinConfig.setInnerjoin();
-	joinConfig.setOrderAsc();					// NB: this matches the range direction of the streams
+	joinConfig.setOrderAsc();					// NB: this must match the range direction of the streams
 	joinConfig.setModeList();
 	joinConfig.streamConfigs = [case7Stream, case8Stream];
-	joinConfig.joints = ['memberid', 'entityid'];			// order is irrelevant; redislayer knows better from key-configs
-	joinConfig.limit = 10;						// NB: this is even useful in case of modeCount()
+	joinConfig.joints = new rl.joints(['memberid', 'entityid']);	// order is irrelevant; redislayer knows better from key-configs
+	joinConfig.limit = 10;						// NB: this is useful even in case of modeCount()
 	if(cases[sequence] == 9){
 		console.log('#### CASE 9: inner-join the ranges from case 7 and 8 ####');
 		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
@@ -395,16 +416,22 @@ case 10:
 		});
 		break;
 	}
+
+case 10:
 	
 	console.log('#### CASE 10: full-join the ranges from case 7 and 8 ####');
 	joinConfig.setFulljoin();
+	// let's try namespacing
+	joinConfig.streamConfigs[0].namespace = 'case7';
+	joinConfig.streamConfigs[1].namespace = 'case8';
+	joinConfig.setjoints = new rl.joints(['groupid', 'entityid']);	// groupid (instead of memberid) to test the jointmap from the streams rangePartitions
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 		err = oopsCaseErrorResult('case10', err, result, true);
 		callback(err);
 	});
 	break;
 
-// TODO migrants
+// TODO MIGRANTS
 
 default:
 	isNotComplete = false;

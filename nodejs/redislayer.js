@@ -277,7 +277,7 @@ For join to be able to order resultsets, streams have to return the list of keys
 	this is why singleIndexQuery and indexListQuery both return a [keys] field.
 In case a resultset doesn't have the [keys] property, a so-called [ord] property can be provided as follows:
 	- if a Config is not available generate one with redislayer.createConfig; if it is not required that this config
-	is added to redislayer's store of configs, the arg.struct should be NULL.
+	is added to redislayer's store of configs, set arg.ontree=false; arg.struct may also be set to NULL.
 	- then use the config object's getFieldOrdering(jointMap, joints) method to generate an ord
 */
 
@@ -293,13 +293,19 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 
 	/**
 	 * A join stream may use a jointMap to map to possibly different names it has of the join-fields
-	 * Once an instance of jointMap is created, the method addPropMap(join-field-name, local-field-name)
+	 * Once an instance of jointMap is created, the method addMaskToField(join-field-name, local-field-name)
 	 * is called several times to create the mappings
 	 * @constructor
 	 * @return	{object}	a jointMap	
 	 */
-	jointMap: datatype.jointMap,
+	jointMap: datatype.fieldMask,
 
+	/*
+	 * @constructor
+	 * @param	{object}	the list of fields on which the join is to be performed; the order is not important
+	 */
+	joints: join.joints,
+		
 	/**
 	 * A streamConfig is created to express info about a stream used in a join.
 	 * The following fields have to be provided for streamConfigs:
@@ -316,7 +322,7 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @return	{object}	a streamConfig
 	 */
 	streamConfig: join.streamConfig,
-	
+
 	/**
 	 * A joinConfig puts together all the specifications of the join to be made.
 	 * the following methods and fields are available:
@@ -327,7 +333,7 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * 	- setModeList():	specify that the joined records should be listed
 	 * 	- setModeCount():	specify that only the counts of the joined records should be returned
 	 * 	- streamConfigs:	the list of streamConfigs involved in the join
-	 * 	- joints:	the list of fields on which the join is to be performed; the order is not important
+	 * 	- joints:	joints object
 	 * 	- limit:	the number of results to return; useful even for setModeCount() for smart termination
 	 * @constructor
 	 * @return	{object}	a joinConfig
@@ -359,8 +365,14 @@ Migrating is simply the call to a function.
 	 * @param	{object}	result - a dict
 	 * @param	{number}	result.code - 0 for success, else it depends
 	 * @param	{object}	result.data - integer, string or list depending on query
-	 * @param	{object}	result.keys - a list of the query keys
+	 * @param	{object}	result.keys - a list of the query keys NB: some commands take multiple keys
 	 * @param	{object}	result.ord - an ord object; encoding about the ordering of the resultset
+	 *						either results.keys or results.ord must be present for Joins to work with the resultset
+	 *						for resultsets which do not come from redislayer, ord can be generated as follows:
+	 *						- if a Config is not available generate one with redislayer.createConfig
+	 *						---- if it is not required that this config is added to redislayer's store of configs,
+	 *						     set arg.ontree=false; arg.struct may also be set to NULL.
+	 *						- then use the config object's getFieldOrdering(jointMap, joints) method to generate an ord
 	 */
 
 };

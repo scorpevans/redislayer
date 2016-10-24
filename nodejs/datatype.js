@@ -317,8 +317,8 @@ getFieldIdx = function getConfigFieldIdx(field){
 getPropFieldIdxValue = function getConfigPropFieldIdxValue(prop, field_idx){
 	return datatype.getConfigPropFieldIdxValue(this, prop, field_idx);
 };
-getFieldOrdering = function getConfigFieldOrdering(joint_map, joints){
-	return datatype.getConfigFieldOrdering(this, joint_map, joints);
+getFieldOrdering = function getConfigFieldOrdering(fieldmask, focus){
+	return datatype.getConfigFieldOrdering(this, fieldmask, focus);
 };
 
 datatype.createConfig = function createDatatypeConfig(id, struct, index_config, on_tree){
@@ -683,104 +683,134 @@ datatype.getConfigFieldPrefactor = function getDatatypeConfigFieldPrefactor(conf
 	return preFactor;
 };
 
-var label_comparator_prop = '_comparator_prop';
-var label_expression_prop = '_expression_prop';		// joins are currently made only on equality
-datatype.jointMap = function datatypeJointMap(){
-	var jm = {};
-	var myjm = function(key){return (key == access_code ? jm : null);};
-	myjm.addPropMap = function(prop, prop_map){
-		jm[prop] = jm[prop] || {};
-		jm[prop][label_comparator_prop] = prop_map;
+var label_mask = '_label_mask';
+var label_expression = '_label_expression';	// currently only equality is allowed
+datatype.fieldMask = function datatypeFieldMask(){
+	var fm = {};
+	var myjm = function(key){return (key == access_code ? fm : null);};
+	myjm.addMaskToField = function addMaskToField(mask, field){
+		fm[mask] = fm[mask] || {};
+		fm[mask][label_mask] = field;
+	};
+	myjm.getMaskField = function getMaskField(mask){
+		return ((fm[mask] || {})[label_mask]  || mask);
+	};
+	myjm.getMaskExpression = function getMaskExpression(mask){
+		return (fm[mask] || {})[label_expression];
 	};
 	myjm.view = function(){
-		return JSON.stringify(jm);
+		return JSON.stringify(fm);
 	};
 	return myjm;
 };
-datatype.getJointMapDict = function getDatatypeJointMapDict(joint_map){
-	return (joint_map != null ? unwrap(joint_map) : {});
+getFieldMaskDict = function getDatatypeFieldMaskDict(fieldmask){
+	return (fieldmask != null ? unwrap(fieldmask) : {});
 };
-datatype.getJointMapMask = function getDatatypeJointMapMask(joint_map, prop){
-	var jm = datatype.getJointMapDict(joint_map);
-	return (((jm || {})[prop] || {})[label_comparator_prop] || prop);
+datatype.getFieldMasks = function getDatatypeFieldMasks(fieldmask){
+	return Object.keys(getFieldMaskDict(fieldmask));
 };
-datatype.getJointMapExpression = function getDatatypeJointMapExpression(joint_map, prop){
-	var jm = datatype.getJointMapDict(joint_map);
-	return (((jm || {})[prop] || {})[label_expression_prop]);
+datatype.getMaskField = function getDatatypeMaskField(fieldmask, mask){
+	return (fieldmask != null ? fieldmask.getMaskField(mask) : mask);
 };
-datatype.addJointMapMask = function addDatatypeJointMapMask(joint_map, prop, prop_map){
-	var jm = datatype.getJointMapDict(joint_map);
-	jm[prop] = jm[prop] || {};
-	jm[prop][label_comparator_prop] = prop_map;
+datatype.getMaskConfig = function getDatatypeMaskField(fieldmask, mask){
+	var fmd = getFieldMaskDict(fieldmask);
+	return (((fmd || {})[mask]) || {})[label_mask];
+};
+datatype.getMaskExpression = function getDatatypeMaskExpression(fieldmask, mask){
+	return (fieldmask != null ? fieldmask.getMaskExpression(mask) : null);
+};
+datatype.addMaskToField = function addDatatypeMaskToField(fieldmask, mask, field){
+	if(fieldmask != null){
+		fieldmask.addMaskToField(mask, field);
+		return true;
+	}
+};
+datatype.mergeFieldMasks = function mergeDatatypeFieldMasks(outer_fm, inner_fm){
+	inner_fm = inner_fm || new datatype.fieldMask();
+	var outer = getFieldMaskDict(outer_fm);
+	// overwrite inner_map; outer_map take precedence 
+	for(var mask in (outer || {})){
+		datatype.addMaskToField(inner_fm, mask, datatype.getMaskField(outer_fm, mask));
+	}
+	return inner_fm;
 };
 
-// TODO this actually only indirectly related to Joins
-//	it seems more like datatype.configFieldOrd
-//	then, getConfigFieldOrdering seems not to need joints and joint_map arguments
-//	then, it seems datatype.jointMap belongs to join.js
-datatype.jointOrd = function datatypeJointOrd(){
-	// keytext, score & uid hold props from joints
-	// fieldconfig:{fmap1:{config:#, field:#}, fmap2:{..}, ..}
-	// 	mask holds fields (which have a mapping to joints) and their respective configs
-	//	these fields could be mangled if they conflict on the left and right side of a merge-join
-	//	hence the need to retain the original field-name under the [field] property
-	var ord = {keytext:[], score:[], uid:[], mask:{}};
+
+datatype.fieldOrd = function datatypeFieldOrd(){
+	var ord = {	keytext:[], score:[], uid:[],		// ordering of focus fieldmasks
+			// TODO propmask can be deprecated by using just stripping of possible namespaces
+			propmask: new datatype.fieldMask(),	// map from fieldmask to prop from which it was mangled
+			fieldmask: new datatype.fieldMask(),	// map from fieldmask to config field
+			configmask:new datatype.fieldMask()};	// map from fieldmask to config of field
 	var myord = function(key){return (key == access_code ? ord : null);};
-	myord.addMask = function(prop, field, config){
-		if(field == null || config == null){
-			throw new Error('joint-ord mask cannot have NULL values');
+	myord.addMaskPropFieldConfig = function(mask, prop, field, config){
+		if(!mask || !prop || !field ||  !config){
+			throw new Error('invalid input for either mask, prop, field or config');
 		}
-		ord.mask[prop] = ord.mask[prop] || {};
-		ord.mask[prop].config = config;
-		ord.mask[prop].field = field;
+		datatype.addMaskToField(ord.propmask, mask, prop);
+		datatype.addMaskToField(ord.fieldmask, mask, field);
+		datatype.addMaskToField(ord.configmask, mask, config);
 	};
-	myord.getMaskPropField = function(prop){
-		return ((ord.mask || {})[prop] || {}).field;
+	myord.getMaskProp = function(mask){
+		return datatype.getMaskField(ord.propmask, mask);
 	};
-	myord.getMaskPropConfig = function(prop){
-		return ((ord.mask || {})[prop] || {}).config;
+	myord.getMaskField = function(mask){
+		return datatype.getMaskField(ord.fieldmask, mask);
+	};
+	myord.getMaskConfig = function(mask){
+		return datatype.getMaskConfig(ord.configmask, mask);
 	};
 	return myord;
 };
-getJointOrdDict = function getJointOrdDict(joint_ord){
-	return (joint_ord != null ? unwrap(joint_ord) : null);
+getFieldOrdDict = function getFieldOrdDict(fieldord){
+	return (fieldord != null ? unwrap(fieldord) : null);
 };
-datatype.getJointOrdProp = function getDatatypeJointOrdProp(joint_ord, prop){
-	var jm = getJointOrdDict(joint_ord);
-	return (jm || {})[prop];
+datatype.getOrdProp = function getDatatypeOrdProp(ord, prop){
+	var fm = getFieldOrdDict(ord);
+	return (fm || {})[prop];
 };
-datatype.resetJointOrdMask = function resetDatatypeJointOrdMask(joint_ord){
-	var jm = getJointOrdDict(joint_ord);
-	jm.mask = {};
+datatype.getOrdFieldMasks = function getDatatypeOrdFieldMasks(fieldord){
+	return datatype.getFieldMasks(datatype.getOrdProp(fieldord, 'fieldmask'));
 };
-datatype.getJointOrdMaskPropField = function getDatatypeJointOrdMaskPropField(joint_ord, prop){
-	return (joint_ord != null ? joint_ord.getMaskPropField(prop) : null);
+datatype.getOrdMaskProp = function getDatatypeOrdMaskProp(fieldord, mask){
+	return (fieldord != null ? fieldord.getMaskProp(mask) : mask);
 };
-datatype.getJointOrdMaskPropConfig = function getDatatypeJointOrdMaskPropConfig(joint_ord, prop){
-	return (joint_ord != null ? joint_ord.getMaskPropConfig(prop) : null);
+datatype.getOrdMaskField = function getDatatypeOrdMaskField(fieldord, mask){
+	return (fieldord != null ? fieldord.getMaskField(mask) : mask);
 };
-datatype.addJointOrdMask = function addDatatypeJointOrdMask(joint_ord, fmask, field, config){
-	if(joint_ord != null){
-		joint_ord.addMask(fmask, field, config);
+datatype.getOrdMaskConfig = function getDatatypeOrdMaskConfig(fieldord, mask){
+	return (fieldord != null ? fieldord.getMaskConfig(mask) : null);
+};
+datatype.addOrdMaskPropFieldConfig = function addDatatypeOrdMaskPropFieldConfig(ord, mask, prop, field, config){
+	if(ord != null){
+		ord.addMaskPropFieldConfig(mask, prop, field, config);
+		return true;
 	}
 };
-datatype.addJointOrdMaskFromClone = function(ord, prop, clone){
-		var cloneProperty = datatype.getJointOrdProp(ord, 'mask')[clone] || {};
-		var field = cloneProperty.field,
-			config = cloneProperty.config;
-		if(field == null || config == null){
-			throw new Error('the prop ['+clone+'] does not have a valid mask in the joint-ord');
-		}
-		datatype.addJointOrdMask(ord, prop, field, config);
-	};
+datatype.addOrdMaskFromClone = function addDatatypeOrdMaskFromClone(ord, mask, clone){
+	var maskProp = datatype.getOrdMaskProp(ord, clone);
+	var maskField = datatype.getOrdMaskField(ord, clone);
+	var maskConfig = datatype.getOrdMaskConfig(ord, clone);
+	datatype.addOrdMaskPropFieldConfig(ord, mask, maskProp, maskField, maskConfig);
+};
+datatype.resetOrdMasks = function resetDatatypeOrdMasks(ord){
+	var fo = getFieldOrdDict(ord);
+	if(fo != null){
+		fo.propmask = new datatype.fieldMask();
+		fo.fieldmask = new datatype.fieldMask();
+		fo.configmask = new datatype.fieldMask();
+		return true;
+	}
+};
+
 
 datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
       	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
 	// this also reduces unnecessary comparisons
 	// merge the edges of the 3 ordParts
-	var keytext = datatype.getJointOrdProp(ord, 'keytext');
-	var score = datatype.getJointOrdProp(ord, 'score');
-	var uid = datatype.getJointOrdProp(ord, 'uid');
+	var keytext = datatype.getOrdProp(ord, 'keytext');
+	var score = datatype.getOrdProp(ord, 'score');
+	var uid = datatype.getOrdProp(ord, 'uid');
 	var firstScoreProp = (score[0] || [])[0];
 	var lastKeytextProp = (keytext[keytext.length-1] || [])[0];
 	// the consecutive occurence of a prop makes it <full>; no offsetting required
@@ -790,7 +820,7 @@ datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
 	// if lastKeytextProp == firstScoreProp, again firstScoreProp must be complete without offset
 	if(firstScoreProp != null && (lastKeytextProp == null || firstScoreProp == lastKeytextProp)){
 		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
-		keytext[idx] = [lastKeytextProp || firstScoreProp, null];	// no offset now => complete prop
+		keytext[idx] = [lastKeytextProp || firstScoreProp, null];	// no offset now => complete value
 		score.splice(0,1);
 		lastKeytextProp = keytext[keytext.length-1][0];			// update
 	}
@@ -800,7 +830,7 @@ datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
 		uid.splice(0, 1);						// i.e. entry is represented in score
 	}else if(firstUIDProp != null && lastScoreProp == null && (lastKeytextProp == null || firstUIDProp == lastKeytextProp)){
 		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
-		keytext[idx] = [lastKeytextProp || firstUIDProp, null];			// no offset now => complete prop
+		keytext[idx] = [lastKeytextProp || firstUIDProp, null];			// no offset now => complete value
 		uid.splice(0,1);
 	}
 	return ord;
@@ -816,42 +846,53 @@ datatype.normalizeOrd = function normalizeDatatypeOrd(ord){
 	so once again to improved ordering matches regardless on where values are stored, floats should be padded whenever they are placed in UIDs
 	the float '123.321' should be stored as 'aa123.321'; the 'a' padding per tenth degree reinstates the float ordering
 */
-datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config, joint_map, joints){
-	var ord = new datatype.jointOrd();
+datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config, fieldmask, focus){
+	var ord = new datatype.fieldOrd();
+	var fields = datatype.getConfigIndexProp(config, 'fields');
 	// convert encoding to [fieldIdx, cmp_field] pairs
-	var cmpProps = joints;
+	var cmpProps = focus;
 	if((cmpProps || []).length > 0){
-		cmpProps.sort(function(a,b){return datatype.getConfigFieldIdx(config, datatype.getJointMapMask(joint_map, a))
-							- datatype.getConfigFieldIdx(config, datatype.getJointMapMask(joint_map, b))});
+		cmpProps.sort(function(a,b){return datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, a))
+							- datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, b))});
 	}else{
 		// NB: iteration is done in field-index order since e.g. uid- and key- prepends are also done in this order
-		cmpProps = datatype.getConfigIndexProp(config, 'fields');
-		joint_map = null;						// no mapping in this case
+		cmpProps = fields;
+		fieldmask = null;				// no mapping in this case
 	}
-	// we are interested in all fields between the min and max indexes of joints
-	// if a non-comparator field appears between these in ord, joints is not sufficient for ordering
-	var startFldIdx = datatype.getConfigFieldIdx(config, datatype.getJointMapMask(joint_map, cmpProps[0]));
-	var endFldIdx = datatype.getConfigFieldIdx(config, datatype.getJointMapMask(joint_map, cmpProps[cmpProps.length-1]));
-	if(cmpProps.length-1 != endFldIdx - startFldIdx){
-		throw new Error('The comparator props submitted are not sufficient for ordering'
-				+ '; ensure there are no missing props between the given ones!');
+	// we are interested in all fields between the min and max indexes of focus
+	// if a non-comparator field appears between these in ord, focus is not sufficient for ordering
+	var startFldIdx = datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, cmpProps[0]));
+	var endFldIdx = datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, cmpProps[cmpProps.length-1]));
+	var spanDiff = (endFldIdx - startFldIdx + 1) - cmpProps.length;
+	if(spanDiff != 0){
+		// NB: it is okay to have partitioned fields between the joints
+		var partitions = datatype.getConfigIndexProp(config, 'partitions');
+		var pf = 0;
+		for(var i=startFldIdx; i <= endFldIdx; i++){
+			if(datatype.isConfigFieldPartitioned(config, i)){
+				pf++;
+			}
+		}
+		if(pf != spanDiff){
+			throw new Error('The focus fields submitted are not sufficient for ordering'
+					+ '; ensure there are no missing fields between the given ones!');
+		}
 	}
 	var scoreFieldIdx = {};
-	var keytext = datatype.getJointOrdProp(ord, 'keytext');
-	var score = datatype.getJointOrdProp(ord, 'score');
-	var uid = datatype.getJointOrdProp(ord, 'uid');
-	for(var i=0; i < cmpProps.length; i++){
-		var fieldIdx = i+startFldIdx;
-		var prop = cmpProps[i];
-		var field = datatype.getJointMapMask(joint_map, prop);
-		if(datatype.isConfigFieldPartitioned(config, fieldIdx)){
-			// partitions are not used for ordering
+	var keytext = datatype.getOrdProp(ord, 'keytext');
+	var score = datatype.getOrdProp(ord, 'score');
+	var uid = datatype.getOrdProp(ord, 'uid');
+	for(var i=0; i < fields.length; i++){
+		var fieldIdx = i;
+		var field = fields[fieldIdx];
+		datatype.addOrdMaskPropFieldConfig(ord, field, field, field, config);
+		// the order focus is on fieldIdx between startFldIdx and endFldIdx
+		if(fieldIdx < startFldIdx || endFldIdx < fieldIdx){
 			continue;
 		}
+		var mask = cmpProps[i-startFldIdx];
 		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIdx);
-		var cmp = [prop, offset];	// this encoding is useful for datatype.normalizeOrd
-		// mask
-		datatype.addJointOrdMask(ord, prop, field, config);
+		var cmp = [mask, offset];
 		// keytext
 	       	if(datatype.isConfigFieldKeySuffix(config, fieldIdx)){
 			if(datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
@@ -863,7 +904,7 @@ datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config
 			// score
 			if(datatype.isConfigFieldScoreAddend(config, fieldIdx)){
 				score.push(cmp);
-				scoreFieldIdx[prop] = fieldIdx;
+				scoreFieldIdx[mask] = fieldIdx;
 			}
 			// uid
 			if(datatype.isConfigFieldUIDPrepend(config, fieldIdx)){
@@ -877,51 +918,57 @@ datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config
 	return datatype.normalizeOrd(ord);
 };
 
-//ord => {keytext:[], score:[], uid:[]};
-datatype.getComparison = function getDatatypeComparison(order, unmasked_fields, ord, index, ref, index_comparator, ref_comparator){
+var numeric = ['integer', 'float'];
+datatype.getMaskFieldMangle = function getDatatypeMangleMaskField(fieldmask, mask, stream_map){
+	var maskField = datatype.getMaskField(fieldmask, mask);
+	return ((stream_map || {})[maskField] || maskField);
+};
+datatype.getComparison = function getDatatypeComparison(order, ord, index, ref, index_fieldmask, ref_fieldmask, index_mangle, ref_mangle){
 	order = order || datatype.getAscendingOrderLabel();
-	var unmaskField = function(fld){return (unmasked_fields || [])[fld] || fld;};
-	var numeric = ['integer', 'float'];
 	// check keytext
-	var keytext = datatype.getJointOrdProp(ord, 'keytext');
+	var keytext = datatype.getOrdProp(ord, 'keytext');
 	for(var i=0; i < keytext.length; i++){
-		var prop = keytext[i][0];
+		var mask = keytext[i][0];
 		var offset = keytext[i][1];
-		// indexes may have different translations of ord props
-		var indexOrdProp = datatype.getJointMapMask(index_comparator, prop);
-		var indexConfig = datatype.getJointOrdMaskPropConfig(ord, indexOrdProp);
-		var indexField = datatype.getJointOrdMaskPropField(ord, indexOrdProp);
-		var indexProp = unmaskField(indexOrdProp);
-		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		// indexes may have different translations of ord masks
+		var indexOrdMask = datatype.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
+		var indexConfig = datatype.getOrdMaskConfig(ord, indexOrdMask);
+		var indexField = datatype.getOrdMaskField(ord, indexOrdMask);
+		var indexProp = datatype.getOrdMaskProp(ord, indexOrdMask);
+		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
 		if(indexConfig == null || indexField == null || !(indexProp in index)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdProp+']) or join-prop (for ['+indexProp+']).');
+			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
 		}
-		var refOrdProp = datatype.getJointMapMask(ref_comparator, prop);
-		var refConfig = datatype.getJointOrdMaskPropConfig(ord, refOrdProp);
-		var refField = datatype.getJointOrdMaskPropField(ord, refOrdProp);
-		var refProp = unmaskField(refOrdProp);
+		var refOrdMask = datatype.getMaskFieldMangle(ref_fieldmask, mask, ref_mangle);
+		var refConfig = datatype.getOrdMaskConfig(ord, refOrdMask);
+		var refField = datatype.getOrdMaskField(ord, refOrdMask);
+		var refProp = datatype.getOrdMaskProp(ord, refOrdMask);
 		if(refConfig == null || refField == null || !(refProp in ref)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+refOrdProp+']) or join-prop (for ['+refProp+']).');
+			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
 		}
-		var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
-		var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
-		// before using index/ref within functions, translate mangled fields back to config-fields
-		var primitiveIndex = {};
-		primitiveIndex[indexField] = index[indexProp];
-		var primitiveRef = {};
-		primitiveRef[refField] = ref[refProp];
-		// normalization of ord can cause props to be pushed to the keytext
+		// normalization of ord can cause masks to be pushed to the keytext
 		// if offset=null in ord, use the full value
-		var indexVal = (offset == null ? index[indexProp] : datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[0]);
-		var refVal = (offset == null ? ref[refProp] : datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0]);
-		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
-		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
-		if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
-			indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-			refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
-		}else{
-			indexVal = (indexVal != null ? ''+indexVal : '');
-			refVal = (refVal != null ? ''+refVal : '');
+		var indexVal = index[indexProp];
+		var refVal = ref[refProp];
+		if(offset != null){
+			var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
+			var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
+			var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
+			var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
+			// before using index/ref within functions, translate mangled fields back to config-fields
+			var primitiveIndex = {};
+			primitiveIndex[indexField] = index[indexProp];
+			var primitiveRef = {};
+			primitiveRef[refField] = ref[refProp];
+			indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[0];
+			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0];
+			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
+				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
+				refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
+			}else{
+				indexVal = (indexVal != null ? ''+indexVal : '');
+				refVal = (refVal != null ? ''+refVal : '');
+			}
 		}
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
@@ -933,38 +980,41 @@ datatype.getComparison = function getDatatypeComparison(order, unmasked_fields, 
 		}
 	}
 	// check score
-	var score = datatype.getJointOrdProp(ord, 'score');
+	var score = datatype.getOrdProp(ord, 'score');
 	for(var i=0; i < score.length; i++){
-		var prop = score[i][0];
-		// indexes may have different translations of ord props
-		var indexOrdProp = datatype.getJointMapMask(index_comparator, prop);
-		var indexConfig = datatype.getJointOrdMaskPropConfig(ord, indexOrdProp);
-		var indexField = datatype.getJointOrdMaskPropField(ord, indexOrdProp);
-		var indexProp = unmaskField(indexOrdProp);
-		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		var mask = score[i][0];
+		var offset = score[i][1];
+		// indexes may have different translations of ord masks
+		var indexOrdMask = datatype.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
+		var indexConfig = datatype.getOrdMaskConfig(ord, indexOrdMask);
+		var indexField = datatype.getOrdMaskField(ord, indexOrdMask);
+		var indexProp = datatype.getOrdMaskProp(ord, indexOrdMask);
+		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
 		if(indexConfig == null || indexField == null || !(indexProp in index)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdProp+']) or join-prop (for ['+indexProp+']).');
+			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
 		}
-		var refOrdProp = datatype.getJointMapMask(ref_comparator, prop);
-		var refConfig = datatype.getJointOrdMaskPropConfig(ord, refOrdProp);
-		var refField = datatype.getJointOrdMaskPropField(ord, refOrdProp);
-		var refProp = unmaskField(refOrdProp);
+		var refOrdMask = datatype.getMaskFieldMangle(ref_fieldmask, mask, ref_mangle);
+		var refConfig = datatype.getOrdMaskConfig(ord, refOrdMask);
+		var refField = datatype.getOrdMaskField(ord, refOrdMask);
+		var refProp = datatype.getOrdMaskProp(ord, refOrdMask);
 		if(refConfig == null || refField == null || !(refProp in ref)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+refOrdProp+']) or join-prop (for ['+refProp+']).');
+			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
 		}
 		var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
 		var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
 		var indexFieldFactor = datatype.getConfigPropFieldIdxValue(indexConfig, 'factors', indexFieldIdx);
 		var refFieldFactor = datatype.getConfigPropFieldIdxValue(refConfig, 'factors', refFieldIdx);
-		// before using index/ref within functions, translate mangled fields back to config-fields
-		var primitiveIndex = {};
-		primitiveIndex[indexField] = index[indexProp];
-		var primitiveRef = {};
-		primitiveRef[refField] = ref[refProp];
-		var indexVal = (indexFieldFactor || 0)
-				* (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || 0);
-		var refVal = (refFieldFactor || 0)
-				* (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || 0);
+		var indexVal = (indexFieldFactor || 0 ) * index[indexProp];
+		var refVal = (refFieldFactor || 0 ) * ref[refProp];
+		if(offset != null){
+			// before using index/ref within functions, translate mangled fields back to config-fields
+			var primitiveIndex = {};
+			primitiveIndex[indexField] = index[indexProp];
+			var primitiveRef = {};
+			primitiveRef[refField] = ref[refProp];
+			indexVal = (indexFieldFactor || 0) * (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || 0);
+			refVal = (refFieldFactor || 0) * (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || 0);
+		}
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 		}else if(indexVal > refVal){
@@ -975,41 +1025,48 @@ datatype.getComparison = function getDatatypeComparison(order, unmasked_fields, 
 		}
 	}
 	// check uid
-	var uid = datatype.getJointOrdProp(ord, 'uid');
+	var uid = datatype.getOrdProp(ord, 'uid');
 	for(var i=0; i < uid.length; i++){
-		var prop = uid[i][0];
-		// indexes may have different translations of ord props
-		var indexOrdProp = datatype.getJointMapMask(index_comparator, prop);
-		var indexConfig = datatype.getJointOrdMaskPropConfig(ord, indexOrdProp);
-		var indexField = datatype.getJointOrdMaskPropField(ord, indexOrdProp);
-		var indexProp = unmaskField(indexOrdProp);
-		// indexOrdProp must have an entry in the Ord, and it's field-reference must exist in the Index
+		var mask = uid[i][0];
+		var offset = uid[i][1];
+		// indexes may have different translations of ord masks
+		var indexOrdMask = datatype.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
+		var indexConfig = datatype.getOrdMaskConfig(ord, indexOrdMask);
+		var indexField = datatype.getOrdMaskField(ord, indexOrdMask);
+		var indexProp = datatype.getOrdMaskProp(ord, indexOrdMask);
+		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
 		if(indexConfig == null || indexField == null || !(indexProp in index)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdProp+']) or join-prop (for ['+indexProp+']).');
+			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
 		}
-		var refOrdProp = datatype.getJointMapMask(ref_comparator, prop);
-		var refConfig = datatype.getJointOrdMaskPropConfig(ord, refOrdProp);
-		var refField = datatype.getJointOrdMaskPropField(ord, refOrdProp);
-		var refProp = unmaskField(refOrdProp);
+		var refOrdMask = datatype.getMaskFieldMangle(ref_fieldmask, mask, ref_mangle);
+		var refConfig = datatype.getOrdMaskConfig(ord, refOrdMask);
+		var refField = datatype.getOrdMaskField(ord, refOrdMask);
+		var refProp = datatype.getOrdMaskProp(ord, refOrdMask);
 		if(refConfig == null || refField == null || !(refProp in ref)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+refOrdProp+']) or join-prop (for ['+refProp+']).');
+			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
 		}
-		// before using index/ref within functions, translate mangled fields back to config-fields
-		var primitiveIndex = {};
-		primitiveIndex[indexField] = index[indexProp];
-		var primitiveRef = {};
-		primitiveRef[refField] = ref[refProp];
-		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
-		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
-		var indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1];
-		var refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1];
-		// NB: integers stored in UIDs are prefixed in a way such that they are still correctly ordered
-		if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
-			indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-			refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
-		}else{
-			indexVal = (indexVal != null ? ''+indexVal : '');
-			refVal = (refVal != null ? ''+refVal : '');
+		// NB: integers stored in UID-strings are prefixed in a way such that they are still correctly ordered
+		var indexVal = index[indexProp];
+		var refVal = ref[refProp];
+		if(offset != null){
+			var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
+			var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
+			var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
+			var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
+			// before using index/ref within functions, translate mangled fields back to config-fields
+			var primitiveIndex = {};
+			primitiveIndex[indexField] = index[indexProp];
+			var primitiveRef = {};
+			primitiveRef[refField] = ref[refProp];
+			indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1];
+			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1];
+			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
+				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
+				refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
+			}else{
+				indexVal = (indexVal != null ? ''+indexVal : '');
+				refVal = (refVal != null ? ''+refVal : '');
+			}
 		}
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
