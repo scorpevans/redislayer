@@ -15,7 +15,7 @@ var async = require('async');
 
 //rl.loadClusterList({clist:clist});		// load list of clusters; already done in dtree.js
 //rl.loadDatatypeTree({dtree:dtree});		// load datatype tree; already done in dtree.js
-rl.setDefaultClusterId(1000);			// set default cluster for this instance of redislayer
+rl.setDefaultClusterLabel('redis6379');		// set default cluster for this instance of redislayer
 
 
 // QUERYING
@@ -145,7 +145,7 @@ case 1: // add some users
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	
-	console.log('#### CASE 1: add users ####');
+	console.log('\n#### CASE 1: add users ####');
 	var users = [];
 	for(var i=1; i <= numberOfUsers; i++){
 		users.push({
@@ -175,7 +175,7 @@ case 2: // add some groups
 	//	- note how the KEYTEXT, UID and XID components are composed based on the config specification
 	//	- note the keysuffixes and the keychain formed by suffixing the key
 	
-	console.log('#### CASE 2: add groups ####');
+	console.log('\n#### CASE 2: add groups ####');
 	var groups = [];
 	for(var i=1; i <= numberOfGroups; i++){
 		groups.push({
@@ -209,7 +209,7 @@ case 3: // add some memberships
 	// user-ids and group-ids have been stowed into redis sets during creation
 	// use srandmember command to select a random number of groups and users and create membership between them
 	// repeat till enough memberships are created	
-	console.log('#### CASE 3: add memberships ####');
+	console.log('\n#### CASE 3: add memberships ####');
 	var cycles = Array(membershipCycles);
 	async.each(cycles, function(cyc, cb){
 		var arg = {	cmd: myUserSetKey.getCommand().randmember,
@@ -267,7 +267,7 @@ case 3: // add some memberships
 // EXERCISE: test if redislayer is able to use the config info to return the stored objects
 
 case 4:
-	console.log('#### CASE 4: query for an existing object ####');
+	console.log('\n#### CASE 4: query for an existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
@@ -278,7 +278,7 @@ case 4:
 	});
 	break;
 case 5:
-	console.log('#### CASE 5: query for a non-existing object ####');
+	console.log('\n#### CASE 5: query for a non-existing object ####');
 	var key = rl.getKey().hkey_user;
 	var arg = {	cmd: key.getCommand().get,
 			key: key,
@@ -289,7 +289,7 @@ case 5:
 	});
 	break;
 case 6:
-	console.log('#### CASE 6: query for existing and non-existing objects ####');
+	console.log('\n#### CASE 6: query for existing and non-existing objects ####');
 	var key = rl.getKey().hkey_user;
 				// non- 999 prefixes don't exist; non-000 suffixes don't exist
 	var indexList = [	{index:{entityid: 999188000, firstnames:null, lastnames:null}},
@@ -327,7 +327,7 @@ case 10:
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
 		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
-		var cmd = key.getCommand()[type];
+		var cmd = key.getCommand()[type];	// e.g. key.getCommand().rangeasc
 		var arg = {	cmd: cmd,
 				key: key,
 				indexorrange: cursor,
@@ -360,7 +360,7 @@ case 10:
 	range7.excludeCursor = false;
 	attr7 = {limit:20, withscores:true};		// withscores since the isadmin property is in the score
 	if(cases[sequence] == 7){
-		console.log('#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
+		console.log('\n#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
 		rangePartitions('case7', 'rangeasc', range7, attr7, callback);
 		break;
 	}
@@ -378,7 +378,7 @@ case 8:
 	range8.excludeCursor = false;
 	attr8 = {limit:20, withscores:true};
 	if(cases[sequence] == 8){
-		console.log('#### CASE 8: range on just a single partition ####');
+		console.log('\n#### CASE 8: range on just a single partition ####');
 		rangePartitions('case8', 'rangeasc', range8, attr8, callback);
 		break;
 	}
@@ -409,7 +409,7 @@ case 9:
 	joinConfig.joints = new rl.joints(['memberid', 'entityid']);	// order is irrelevant; redislayer knows better from key-configs
 	joinConfig.limit = 10;						// NB: this is useful even in case of modeCount()
 	if(cases[sequence] == 9){
-		console.log('#### CASE 9: inner-join the ranges from case 7 and 8 ####');
+		console.log('\n#### CASE 9: inner-join the ranges from case 7 and 8 ####');
 		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 			err = oopsCaseErrorResult('case9', err, result, true);
 			callback(err);
@@ -419,7 +419,7 @@ case 9:
 
 case 10:
 	
-	console.log('#### CASE 10: full-join the ranges from case 7 and 8 ####');
+	console.log('\n#### CASE 10: full-join the ranges from case 7 and 8 ####');
 	joinConfig.setFulljoin();
 	// let's try namespacing
 	joinConfig.streamConfigs[0].namespace = 'case7';
@@ -440,10 +440,10 @@ default:
 },
 function(err){
 	if(!err){
-		console.log("#### That's all folks! ####");
+		console.log("\n#### That's all folks! ####");
 	}else{
 		console.log(err);
-		console.log("#### please submit a pull-request to fix the error ####");
+		console.log("\n#### please submit a pull-request to fix the error ####");
 	}
 });	
 

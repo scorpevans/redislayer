@@ -495,10 +495,6 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 
 query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, attribute, then){
 	var keys = [key];				// TODO deprecate
-	// querying fields with partitions is tricky
-	// execute the different partitions separately and merge the results
-	// NB: partitions allow use of e.g. flags without breaking ordering
-	var clusterInstance = getQueryDBInstance(cmd, keys);
 	var keyConfig = datatype.getKeyConfig(key);
 	var cmdType = command.getType(cmd);
 	var partitionCrossJoins = [];
@@ -508,6 +504,9 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 	var rangeConfig = (isRangeQuery ? index_or_rc : null);
 	var index = (isRangeQuery ? (rangeConfig || {}).index : index_or_rc) || {};
 	if(datatype.isConfigPartitioned(keyConfig) && isRangeQuery){
+		// querying fields with partitions is tricky
+		// execute the different partitions separately and merge the results
+		// NB: partitions allow use of e.g. flags without breaking ordering
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
 		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);

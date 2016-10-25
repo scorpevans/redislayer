@@ -51,7 +51,7 @@ var dtree = {
 		 * provide a deterministic function which expects the following arguments
 		 * @param	{object}	arg - a dict
 		 * @param	{object}	arg.metacmd - generic command e.g. get (specific commands are made after cluster is known)
-		 * @param	{object}	arg.key - query Key
+		 * @param	{object}	arg.keys - list of query Keys
 		 * @param	{object}	keysuffixindex - query Index with field values replaced with their keySuffixes
 		 *				keySuffixes group indexes into equivalent classes of their keyText; this input is necessary
 		 *				to prevent clusterinstance function from making non-contiguous distribution of index
@@ -184,7 +184,7 @@ var dtree = {
 				clusterinstance: function(arg){
 						var ksi = arg.keysuffixindex;	// NB: note keysuffixindex definition above
 						if(ksi.entityid == '9991'){
-							return rl.getCluster()['2000'].master;
+							return rl.getCluster().redis6379.master;
 						}else{
 							return rl.getDefaultCluster().master;
 						} 
@@ -231,13 +231,13 @@ dtree =	{
 				id:'hkey_group',
 				label:'redislayer:example:group:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster()['1000'].master;},
+					clusterinstance: function(arg){return rl.getCluster().redis6379.master;},
 				}
 				},{
 				id:'hkey_user',
 				label:'redislayer:example:user:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster()['2000'].master;},
+					clusterinstance: function(arg){return rl.getCluster().redis6380.master;},
 				}
 			}]
 			},{
@@ -261,7 +261,7 @@ dtree =	{
 				id:'skey_userid',
 				label:'redislayer:example:user:id',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster()['2000'].master;},
+					clusterinstance: function(arg){return rl.getCluster().redis6380.master;},
 				}
 			}],
 		}]

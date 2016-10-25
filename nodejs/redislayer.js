@@ -24,14 +24,14 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 */
 	
 	/*
-	 * @param	{number}	the id of the cluster to be designated as the default-cluster
+	 * @param	{string}	the label of the cluster to be designated as the default-cluster
 	 */
-	setDefaultClusterId: cluster.setDefaultId,
+	setDefaultClusterLabel: cluster.setDefaultLabel,
 
 	/*
-	 * @return	{number}	the id of the cluster designated as the default-cluster
+	 * @return	{string}	the label of the cluster designated as the default-cluster
 	 */
-	getDefaultClusterId: cluster.getDefaultId,
+	getDefaultClusterLabel: cluster.getDefaultLabel,
 
 	/**
 	 * @return	{object}	the default-cluster along with the Roles with which it was configured
@@ -40,7 +40,7 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 	getDefaultCluster: cluster.getDefault,
 
 	/**
-	 * @param	{number}	the id of the cluster to fetch; NULL value returns all clusters
+	 * @param	{string}	the label of the cluster to fetch; NULL value returns all clusters
 	 * @return	{object}	the cluster along with the Roles with which it was configured
 	 *				NB: instantiate the cluster by selecting a Role of the returned object
 	 */
@@ -48,7 +48,7 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 
 
 	/**
-	 * @param	{number}	the id of the cluster to remove from redislayer
+	 * @param	{string}	the label of the cluster to remove from redislayer
 	 * @return	{object}	the removed cluster
 	 */
 	removeCluster: cluster.remove,
@@ -341,6 +341,8 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	joinConfig: join.joinConfig,
 
 	/**
+	 * merge-join a list of resultset streams ordered in the same direction.
+	 * This is currently valid only for one-to-one joins; behaviour on other joins is unspecified.
 	 * @param	{object}	arg - a dict
 	 * @param	{object}	arg.joinconfig - the joinConfig
 	 * @param	{resultsetCallback}	callback handler
@@ -360,6 +362,7 @@ Migrating is simply the call to a function.
 		migrate(arg.keyorigin, arg.keydestination, arg.indexstart, arg.indexend, arg.batchsize, arg.napduration, then);
 	},
 
+// CALLBACK
 	/*
 	 * @callback	resultsetCallback
 	 * @param	{object}	result - a dict
