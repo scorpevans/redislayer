@@ -127,6 +127,7 @@ cases.push(7);
 cases.push(8);
 cases.push(9);
 cases.push(10);
+cases.push(11);
 
 var isNotComplete = true;
 
@@ -323,6 +324,7 @@ case 7:
 case 8:
 case 9:
 case 10:
+case 11:
 	rangePartitions = function rangePartitions(mycase, type, cursor, attribute, cb){
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
@@ -334,8 +336,6 @@ case 10:
 				attribute:attribute,
 				};
 		rl.singleIndexQuery(arg, function(err, result){
-			var logResult = mycase == 'case7' || mycase == 'case8';
-			err = oopsCaseErrorResult(mycase, err, result, logResult);
 			// joins require info on the sorting order of resultset
 			// hence all resultsets used in joins must have [keys] field of resultset keys
 			// see resultsetCallback in redislayer.js for info in case the resultset doesn't come from redislayer
@@ -349,7 +349,7 @@ case 10:
 			cb(err, result);
 		});
 	};
-	var index = {	isadmin: [0,1],			// merge multiple partitions
+	var index = {	isadmin: 0,			// range single partition
 			entityid: 9991952000,
 			memberid: 99918000};
 	range7 = new rl.rangeConfig(index);
@@ -358,75 +358,96 @@ case 10:
 	range7.stopProp = 'entityid';
 	range7.boundValue = null;
 	range7.excludeCursor = false;
-	attr7 = {limit:20, withscores:true};		// withscores since the isadmin property is in the score
+	attr7 = {limit:10, withscores:true};		// withscores since the isadmin property is in the score
 	if(cases[sequence] == 7){
-		console.log('\n#### CASE 7: range across high-order partition-field [isadmin]; result is nonetheless ordered by memberid ####');
-		rangePartitions('case7', 'rangeasc', range7, attr7, callback);
+		console.log('\n#### CASE 7: range on just a single partition ####');
+		rangePartitions('case7', 'rangeasc', range7, attr7, function(err, result){
+			err = oopsCaseErrorResult('case7', err, result, true);
+			callback(err);
+		});
 		break;
 	}
-	
-case 8:
 
-	var index = {	isadmin: 0,			// range single partition
+case 8: 	
+	var index = {	isadmin: 1,			// range single partition
 			entityid: 9991952000,
 			memberid: 99918000};
-	range8 = new rl.rangeConfig(index);
-	// the startProp, stopProp and boundValue, imply we want members of the entityids from 9991952000 to 9991990000
-	range8.startProp = 'entityid';
-	range8.stopProp = 'entityid';
-	range8.boundValue = 9991990000;
-	range8.excludeCursor = false;
-	attr8 = {limit:20, withscores:true};
+	range7.index = index;
 	if(cases[sequence] == 8){
 		console.log('\n#### CASE 8: range on just a single partition ####');
-		rangePartitions('case8', 'rangeasc', range8, attr8, callback);
+		rangePartitions('case8', 'rangeasc', range7, attr7, function(err, result){
+			err = oopsCaseErrorResult('case8', err, result, true);
+			callback(err);
+		});
 		break;
 	}
-
-// MERGERS
 
 case 9:
 
-	var case7Stream = new rl.streamConfig();
-	case7Stream.func = rangePartitions;
-	case7Stream.args = ['case{9,10}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
-	case7Stream.namespace = null;					// namespacing not necessary here since streams have equivalent fields
-	case7Stream.jointMap = null;					// not required since both join-streams have the same field-names
-	case7Stream.cursorIndex = 2;
-	case7Stream.attributeIndex = 3;
-	var case8Stream = new rl.streamConfig();
-	case8Stream.func = rangePartitions;
-	case8Stream.args = ['case{9,10}', 'rangeasc', range8, attr8];
-	case8Stream.namespace = null;
-	case8Stream.jointMap = null;
-	case8Stream.cursorIndex = 2;
-	case8Stream.attributeIndex = 3;
-	joinConfig = new rl.joinConfig();
-	joinConfig.setInnerjoin();
-	joinConfig.setOrderAsc();					// NB: this must match the range direction of the streams
-	joinConfig.setModeList();
-	joinConfig.streamConfigs = [case7Stream, case8Stream];
-	joinConfig.joints = new rl.joints(['memberid', 'entityid']);	// order is irrelevant; redislayer knows better from key-configs
-	joinConfig.limit = 10;						// NB: this is useful even in case of modeCount()
+	var index = {	isadmin: [0,1],			// merge multiple partitions
+			entityid: 9991952000,
+			memberid: 99918000};
+	range9 = new rl.rangeConfig(index);
+	// the startProp, stopProp and boundValue, imply we want members of the entityids from 9991952000 to 9991990000
+	range9.startProp = 'entityid';
+	range9.stopProp = 'entityid';
+	range9.boundValue = 9991990000;
+	range9.excludeCursor = false;
+	attr9 = {limit:10, withscores:true};
 	if(cases[sequence] == 9){
-		console.log('\n#### CASE 9: inner-join the ranges from case 7 and 8 ####');
-		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
+		console.log('\n#### CASE 9: range across high-order partition-field [isadmin];'
+				+' result is nonetheless ordered by the non-partition fields only ####');
+		rangePartitions('case9', 'rangeasc', range9, attr9, function(err, result){
 			err = oopsCaseErrorResult('case9', err, result, true);
 			callback(err);
 		});
 		break;
 	}
 
+// MERGERS
+
 case 10:
+
+	var case8Stream = new rl.streamConfig();
+	case8Stream.func = rangePartitions;
+	case8Stream.args = ['case{10,11}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
+	case8Stream.namespace = null;					// namespacing not necessary here since streams have equivalent fields
+	case8Stream.jointMap = null;					// not required since both join-streams have the same field-names
+	case8Stream.cursorIndex = 2;
+	case8Stream.attributeIndex = 3;
+	var case8Stream = new rl.streamConfig();
+	case9Stream.func = rangePartitions;
+	case9Stream.args = ['case{10,11}', 'rangeasc', range9, attr9];
+	case9Stream.namespace = null;
+	case9Stream.jointMap = null;
+	case9Stream.cursorIndex = 2;
+	case9Stream.attributeIndex = 3;
+	joinConfig = new rl.joinConfig();
+	joinConfig.setInnerjoin();
+	joinConfig.setOrderAsc();					// NB: this must match the range direction of the streams
+	joinConfig.setModeList();
+	joinConfig.streamConfigs = [case8Stream, case9Stream];
+	joinConfig.joints = new rl.joints(['memberid', 'entityid']);	// order is irrelevant; redislayer knows better from key-configs
+	joinConfig.limit = 20;						// NB: this is useful even in case of modeCount()
+	if(cases[sequence] == 10){
+		console.log('\n#### CASE 10: inner-join the ranges from case 8 and 9 ####');
+		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
+			err = oopsCaseErrorResult('case10', err, result, true);
+			callback(err);
+		});
+		break;
+	}
+
+case 11:
 	
-	console.log('\n#### CASE 10: full-join the ranges from case 7 and 8 ####');
+	console.log('\n#### CASE 11: full-join the ranges from case 8 and 9 ####');
 	joinConfig.setFulljoin();
 	// let's try namespacing
-	joinConfig.streamConfigs[0].namespace = 'case7';
-	joinConfig.streamConfigs[1].namespace = 'case8';
+	joinConfig.streamConfigs[0].namespace = 'case8';
+	joinConfig.streamConfigs[1].namespace = 'case9';
 	joinConfig.setjoints = new rl.joints(['groupid', 'entityid']);	// groupid (instead of memberid) to test the jointmap from the streams rangePartitions
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
-		err = oopsCaseErrorResult('case10', err, result, true);
+		err = oopsCaseErrorResult('case11', err, result, true);
 		callback(err);
 	});
 	break;

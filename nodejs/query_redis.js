@@ -722,7 +722,6 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 				}
 				//var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
 				// TODO add countbyscorelex; //TODO implement stopScore
-				var exclude = {}; exclude[asc] = '1'; exclude[desc] = '0';
 				var zrank = {}; zrank[asc] = '"zrank"'; zrank[desc] ='"zrevrank"';
 				var zrange = {}; zrange[asc] = '"zrange"'; zrange[desc] ='"zrevrange"';
 				var zlimit = {}; zlimit[asc] = '-1'; zlimit[desc] = '0';
@@ -747,7 +746,6 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 					+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
 					+ 'end;'
 					+ 'if rank ~= nil then'
-					+ '     rank = rank - '+exclude[command.getOrder(cmd)]+';'
 					+ '     return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
 						+ (limit != null ? 'rank+'+limit+'-1' : zlimit[command.getOrder(cmd)])
 						+ (attribute.withscores ? ', "withscores");' : ');')

@@ -384,7 +384,6 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 								xid = result.data[i];
 								uid = args[i];		// TODO generally, how so?? think a bit about this!
 							}
-							// TODO optimize: detail.field is computed multiples time in the FOR-loop
 							detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, fieldBranch);
 							// querying field-branches can result in separated resultsets; merge them into a single record
 							if(detail.field != null){
@@ -475,10 +474,10 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 	}, function(err){
 		if(resultType == 'array'){
 			// ensure sorting since dicts do not guaranteed keys are returned in sorted order
-			var sortedKeys = Object.keys(resultset || {}).sort(function(a,b){return parseInt(a,10) > parseInt(b, 10);});
 			ret.data = [];
-			for(var i=0; i < sortedKeys.length; i++){
-				ret.data.push(resultset[sortedKeys[i]]);
+			var len = Object.keys(resultset || []).length;
+			for(var i=0; i < len; i++){
+				ret.data[i] = resultset[''+i];
 			}
 		}else{
 			ret.data = (resultset == label_lua_nil ? null : resultset);

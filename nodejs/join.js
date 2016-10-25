@@ -368,11 +368,11 @@ join.mergeStreams = function mergeStreams(join_config, then){
 							}
 							// terminate if enough results are accounted for
 							var accounted = (isRangeCount ? joinData : joinData.length);
-							if(accounted >= limit){
-								// initiate termination
-								streamIndexes = [];
-								break;
-							}
+							//if(accounted >= limit){		// don't waste resultsets this way
+							//	// initiate termination
+							//	streamIndexes = [];
+							//	break;
+							//}
 						}
 						// reset registers
 						if(joinType == 'fulljoin'){

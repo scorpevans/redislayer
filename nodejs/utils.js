@@ -20,7 +20,7 @@ utils.isObjectEmpty = function isObjectEmpty(obj) {
 
 utils.logError = function logError(err, message){
 	if(err){
-		//console.error('%s, %s',message, err);
+		console.error('%s, %s',message, err);
 		return true;
 	} else{
 		return false;
