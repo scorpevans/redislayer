@@ -753,6 +753,11 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 					+ '     return {};'
 					+ 'end;'
 				luaArgs.unshift(uid);
+				// TODO rewrite lua scripts not to used normal ranging functions
+				// 	for now hack around example.js issue
+				if(startScore && startScore[0] == '('){
+					startScore = 1 + startScore.slice(1);
+				}
 				luaArgs.unshift(startScore || label_lua_nil);
 			}else if(utils.startsWith(command.getType(cmd), 'countbylex') || utils.startsWith(command.getType(cmd), 'rangebylex')
 					|| utils.startsWith(command.getType(cmd), 'delrangebylex')){

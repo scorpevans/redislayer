@@ -325,7 +325,7 @@ case 8:
 case 9:
 case 10:
 case 11:
-	rangePartitions = function rangePartitions(mycase, type, cursor, attribute, cb){
+	rangePartitions = function rangePartitions(type, cursor, attribute, cb){
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
 		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
@@ -361,7 +361,7 @@ case 11:
 	attr7 = {limit:10, withscores:true};		// withscores since the isadmin property is in the score
 	if(cases[sequence] == 7){
 		console.log('\n#### CASE 7: range on just a single partition ####');
-		rangePartitions('case7', 'rangeasc', range7, attr7, function(err, result){
+		rangePartitions('rangeasc', range7, attr7, function(err, result){
 			err = oopsCaseErrorResult('case7', err, result, true);
 			callback(err);
 		});
@@ -375,7 +375,7 @@ case 8:
 	range7.index = index;
 	if(cases[sequence] == 8){
 		console.log('\n#### CASE 8: range on just a single partition ####');
-		rangePartitions('case8', 'rangeasc', range7, attr7, function(err, result){
+		rangePartitions('rangeasc', range7, attr7, function(err, result){
 			err = oopsCaseErrorResult('case8', err, result, true);
 			callback(err);
 		});
@@ -397,7 +397,7 @@ case 9:
 	if(cases[sequence] == 9){
 		console.log('\n#### CASE 9: range across high-order partition-field [isadmin];'
 				+' result is nonetheless ordered by the non-partition fields only ####');
-		rangePartitions('case9', 'rangeasc', range9, attr9, function(err, result){
+		rangePartitions('rangeasc', range9, attr9, function(err, result){
 			err = oopsCaseErrorResult('case9', err, result, true);
 			callback(err);
 		});
@@ -410,18 +410,18 @@ case 10:
 
 	var case8Stream = new rl.streamConfig();
 	case8Stream.func = rangePartitions;
-	case8Stream.args = ['case{10,11}', 'rangeasc', range7, attr7];	// NB: streams normally range (not count); else join doesn't make much sense
+	case8Stream.args = ['rangeasc', range7, attr7];			// NB: streams normally range (not count); else join doesn't make much sense
 	case8Stream.namespace = null;					// namespacing not necessary here since streams have equivalent fields
 	case8Stream.jointMap = null;					// not required since both join-streams have the same field-names
-	case8Stream.cursorIndex = 2;
-	case8Stream.attributeIndex = 3;
-	var case8Stream = new rl.streamConfig();
+	case8Stream.cursorIndex = 1;
+	case8Stream.attributeIndex = 2;
+	var case9Stream = new rl.streamConfig();
 	case9Stream.func = rangePartitions;
-	case9Stream.args = ['case{10,11}', 'rangeasc', range9, attr9];
+	case9Stream.args = ['rangeasc', range9, attr9];
 	case9Stream.namespace = null;
 	case9Stream.jointMap = null;
-	case9Stream.cursorIndex = 2;
-	case9Stream.attributeIndex = 3;
+	case9Stream.cursorIndex = 1;
+	case9Stream.attributeIndex = 2;
 	joinConfig = new rl.joinConfig();
 	joinConfig.setInnerjoin();
 	joinConfig.setOrderAsc();					// NB: this must match the range direction of the streams
