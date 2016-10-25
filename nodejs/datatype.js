@@ -850,13 +850,17 @@ datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config
 	var ord = new datatype.fieldOrd();
 	var fields = datatype.getConfigIndexProp(config, 'fields');
 	// convert encoding to [fieldIdx, cmp_field] pairs
-	var cmpProps = focus;
+	var cmpProps = focus || [];
 	if((cmpProps || []).length > 0){
 		cmpProps.sort(function(a,b){return datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, a))
 							- datatype.getConfigFieldIdx(config, datatype.getMaskField(fieldmask, b))});
-	}else{
-		// NB: iteration is done in field-index order since e.g. uid- and key- prepends are also done in this order
-		cmpProps = fields;
+	}else{	// if focus is not specified, use all fields except partitioned ones
+		for(var i=0; i < fields.length; i++){
+			var fld = fields[i];
+			if(!datatype.isConfigFieldPartitioned(config, i)){
+				cmpProps.push(fld);
+			}
+		}
 		fieldmask = null;				// no mapping in this case
 	}
 	// we are interested in all fields between the min and max indexes of focus
@@ -882,6 +886,7 @@ datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config
 	var keytext = datatype.getOrdProp(ord, 'keytext');
 	var score = datatype.getOrdProp(ord, 'score');
 	var uid = datatype.getOrdProp(ord, 'uid');
+	// NB: iteration is done in field-index order since e.g. uid- and key- prepends are also done in this order
 	for(var i=0; i < fields.length; i++){
 		var fieldIdx = i;
 		var field = fields[fieldIdx];

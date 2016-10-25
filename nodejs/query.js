@@ -612,9 +612,9 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 							i = 0;			// reset cycle
 							if(boundIndex != null){	// return the least index across the partitions during the last cycle
 								mergeData.push(boundIndex);
-								if(mergeData.length >= limit){
-									break;
-								}
+								//if(mergeData.length >= limit){	// don't waste resultsets this way
+								//	break;
+								//}
 								partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
 								// reset boundIndex for next comparison cycle
 								// else how could higher indexes be less-than the previous boundIndex
@@ -639,10 +639,9 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 							boundPartition = i;
 							boundIndex = index;
 						}else if(reln == '='){
-							// this should NOT happen but in case the values match,
-							// just skip this partition's value
-							utils.logError('WARNING: query.singleIndexQuery');
-							partitionIdx[i] = 1 + (partitionIdx[i] || 0);
+							// keep the 2nd match for later cycle
+							// NB: keep in mind partitions are not used in merging here
+							// values may be exactly the same or may differ on the partitioned fields
 						}
 					}
 				}
