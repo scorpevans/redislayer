@@ -1,4 +1,4 @@
-Redislayer makes development on your data layer easy, fast and pleasurable!
+Redislayer makes development on your data layer easy, fast and fun!
 
 ## Motivation - ORM, query engine ... transparency atop heterogeneity
 1. storage :- use a standard configuration to define how and where to store/retrieve data objects on heterogeneous databases
