@@ -584,7 +584,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		var partitionResults = [];
 		var partitionIdx = [];
 		var pcjIndexes = Object.keys(partitionCrossJoins);
-		var limit = (attribute || {}).limit;
+		var limit = (attribute || {}).limit || Infinity;
 		var mergeData = [];
 		async.each(pcjIndexes, function(idx, callback){
 			var pcj = partitionCrossJoins[idx];
@@ -604,12 +604,15 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 				var boundPartition = null;
 				var cmdOrder = command.getOrder(cmd);
 				ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
-				for(var i=0; true; i++){
-					if( i == pcjIndexes.length){
-						i = 0;                  // reset cycle
-						if(boundIndex != null){	// return the least index across the partitions during the last cycle
+				for(var i=pcjIndexes.length-1; true; i--){
+					if(pcjIndexes.length == 0){
+						break;
+					}
+					if(i == -1){
+						i = pcjIndexes.length - 1;		// reset cycle
+						if(boundIndex != null){			// return the least index across the partitions during the last cycle
 							mergeData.push(boundIndex);
-							//if(mergeData.length >= limit){	// don't waste resultsets this way
+							//if(mergeData.length >= limit){// don't waste resultsets this way
 							//	break;
 							//}
 							partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
@@ -621,26 +624,33 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 							break;
 						}
 					}
-					var idx = partitionIdx[i] || 0;				// indexes are initially null
-					if(idx >= (partitionResults[i] || []).length){
-						// if a partition runs out of results, we can NOT continue as usual with others
-						// the empty partition may present some prior object to values in remaining partitions
+					var part = pcjIndexes[i];
+					var idx = partitionIdx[part] || 0;		// indexes are initially null
+					if(idx >= (partitionResults[part] || []).length){
+						// if a partition runs out of results
+						// we can continue with other partitions IFF the current partition is completely out
+						// otherwise further results may present some prior object to values in remaining partitions
 						// hence putting any of the remaining values next may be false
-						break;
+						if((partitionResults[part] || []).length < (limit || Infinity)){
+							pcjIndexes.splice(part, 1);
+							continue;
+						}else{
+							break;
+						}
 					}
-					var index = partitionResults[i][idx];
-					var indexJM = null;					// same fields; no need for jointmap here
+					var index = partitionResults[part][idx];
+					var indexJM = null;				// same fields; no need for jointmap here
 					var reln = null;
 					if(boundIndex != null){
 						reln = datatype.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
 					}
 					if(boundIndex == null || reln == '<'){
-						boundPartition = i;
+						boundPartition = part;
 						boundIndex = index;
 					}else if(reln == '='){
 						// NB: keep in mind partitions are not used in merging here
 						// values may be exactly the same or may differ on the partitioned fields
-						partitionIdx[i] = 1 + (partitionIdx[i] || 0);
+						partitionIdx[part] = 1 + (partitionIdx[part] || 0);
 					}
 				}
 				if(utils.startsWith(cmdType, 'count')){
