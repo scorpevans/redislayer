@@ -4,6 +4,7 @@ Redislayer makes development on your data layer easy, fast and fun!
 1. storage :- use a standard configuration to define how and where to store/retrieve data objects on heterogeneous databases
 2. query :- use a standard directive to talk to heterogenous databases, and receive a standard result
 3. cluster :- interact with just a single endpoint, instead of separately to tons of databases
+4. paging :- query for chunks of data beginning from a particular cursor point
 
 ## Framework
 Due to it's primitive storages, the Redis API is a suitable entry point to interact with more abstract, for example SQL, databases. With Redislayer you can just speak Redis, and trust that nearly loss-less translations (in storage schema) are made to other databases.

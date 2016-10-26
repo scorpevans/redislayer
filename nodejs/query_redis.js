@@ -733,6 +733,7 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 					+ '    score = redis.call("zscore", KEYS[1], member);'					// check score tally first
 					+ '    if score == startScore then'							// then rank can be set
 					+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
+					+ '        rank = rank + '+(startScore && startScore[0] == '(' ? 1 : 0)+';'
 					+ '    else'
 					+ '        member = member.."'+collision_breaker+'";'
 					+ '        score = startScore;'
@@ -746,17 +747,17 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 					+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
 					+ 'end;'
 					+ 'if rank ~= nil then'
-					+ '     return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
+					+ '    return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
 						+ (limit != null ? 'rank+'+limit+'-1' : zlimit[command.getOrder(cmd)])
 						+ (attribute.withscores ? ', "withscores");' : ');')
 					+ 'else'
-					+ '     return {};'
+					+ '    return {};'
 					+ 'end;'
 				luaArgs.unshift(uid);
 				// TODO rewrite lua scripts not to used normal ranging functions
 				// 	for now hack around example.js issue
 				if(startScore && startScore[0] == '('){
-					startScore = 1 + startScore.slice(1);
+					startScore = parseInt(startScore.slice(1));
 				}
 				luaArgs.unshift(startScore || label_lua_nil);
 			}else if(utils.startsWith(command.getType(cmd), 'countbylex') || utils.startsWith(command.getType(cmd), 'rangebylex')

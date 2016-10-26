@@ -599,52 +599,55 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		}, function(err){
 			var ret = {code:1};
 			if(!utils.logError(err, 'query.singleIndexQuery')){
-				if(utils.startsWith(cmdType, 'count')){
-					mergeData = partitionResults.reduce(function(a,b){return a+b;});
-				}else{	// compare next values across the partitions and pick the least
-					var boundIndex = null;
-					var boundPartition = null;
-					var cmdOrder = command.getOrder(cmd);
-					ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
-					for(var i=0; true; i++){
-						if( i == pcjIndexes.length){
-							i = 0;			// reset cycle
-							if(boundIndex != null){	// return the least index across the partitions during the last cycle
-								mergeData.push(boundIndex);
-								//if(mergeData.length >= limit){	// don't waste resultsets this way
-								//	break;
-								//}
-								partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
-								// reset boundIndex for next comparison cycle
-								// else how could higher indexes be less-than the previous boundIndex
-								boundIndex = null;
-								boundPartition = null;
-							}else{	// eof
-								break;
-							}
-						}
-						var idx = partitionIdx[i] || 0;				// indexes are initially null
-						if(idx >= (partitionResults[i] || []).length){
-							// if a partition runs out of results, merging continues as usual with others
-							continue;
-						}
-						var index = partitionResults[i][idx];
-						var indexJM = null;					// same fields; no need for jointmap here
-						var reln = null;
-						if(boundIndex != null){
-							reln = datatype.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
-						}
-						if(boundIndex == null || reln == '<'){
-							boundPartition = i;
-							boundIndex = index;
-						}else if(reln == '='){
-							// keep the 2nd match for later cycle
-							// NB: keep in mind partitions are not used in merging here
-							// values may be exactly the same or may differ on the partitioned fields
+				// compare next values across the partitions and pick the least
+				var boundIndex = null;
+				var boundPartition = null;
+				var cmdOrder = command.getOrder(cmd);
+				ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
+				for(var i=0; true; i++){
+					if( i == pcjIndexes.length){
+						i = 0;                  // reset cycle
+						if(boundIndex != null){	// return the least index across the partitions during the last cycle
+							mergeData.push(boundIndex);
+							//if(mergeData.length >= limit){	// don't waste resultsets this way
+							//	break;
+							//}
+							partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
+							// reset boundIndex for next comparison cycle
+							// else how could higher indexes be less-than the previous boundIndex
+							boundIndex = null;
+							boundPartition = null;
+						}else{	// eof
+							break;
 						}
 					}
+					var idx = partitionIdx[i] || 0;				// indexes are initially null
+					if(idx >= (partitionResults[i] || []).length){
+						// if a partition runs out of results, we can NOT continue as usual with others
+						// the empty partition may present some prior object to values in remaining partitions
+						// hence putting any of the remaining values next may be false
+						break;
+					}
+					var index = partitionResults[i][idx];
+					var indexJM = null;					// same fields; no need for jointmap here
+					var reln = null;
+					if(boundIndex != null){
+						reln = datatype.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
+					}
+					if(boundIndex == null || reln == '<'){
+						boundPartition = i;
+						boundIndex = index;
+					}else if(reln == '='){
+						// NB: keep in mind partitions are not used in merging here
+						// values may be exactly the same or may differ on the partitioned fields
+						partitionIdx[i] = 1 + (partitionIdx[i] || 0);
+					}
 				}
-				ret = {code:0, data:mergeData, keys:keys};
+				if(utils.startsWith(cmdType, 'count')){
+					ret = {code:0, data:mergeData.length, keys:keys};
+				}else{
+					ret = {code:0, data:mergeData, keys:keys};
+				}
 			}
 			then(err, ret);	
 		});

@@ -76,7 +76,6 @@ join.joinConfig = function joinConfig(){
 	myjc.setModeList = function(){jc.mode = 'range';};
 	myjc.setOrderAsc = function(){jc.order = asc;};
 	myjc.setOrderDesc = function(){jc.order = desc;};
-
 	return myjc;
 };
 
@@ -260,7 +259,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamProps[i].attributeIdx = attrIdx;
 		if((streamProps[i].argsCopy[attrIdx]||{}).limit == null){
 			streamProps[i].argsCopy[attrIdx] = utils.shallowCopy(streamProps[i].argsCopy[attrIdx]) || {};	// make a copy
-			streamProps[i].argsCopy[attrIdx].limit = 1;//limit || defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
 		}else if(streamProps[i].argsCopy[attrIdx].limit < limit){
 			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
 		}
@@ -281,13 +280,14 @@ join.mergeStreams = function mergeStreams(join_config, then){
 	}
 	var boundIndex = null;
 	var boundIndexIdx = -1;
+	var cursorReln = null;				// when refetch returns this relationship should exist b/n cursor and head element
 	var boundIndexMask = {};
 	var innerJoinCount = 0;
-	var refreshIdx = null;						// the index of streamIndexes where joins are left off to fetch data
-	var ord = null;							// the merges ord of the rangeconfigs
-	var streamJointMangles = [];					// mangle info while merging ords
-	var streamJointMaps = [];					// the merge of the inner and outer jointMaps
-	limit = limit || Infinity;					// NB: not to be confused with limit in <attribute>
+	var refreshIdx = null;				// the index of streamIndexes where joins are left off to fetch data
+	var ord = null;					// the merges ord of the rangeconfigs
+	var streamJointMangles = [];			// mangle info while merging ords
+	var streamJointMaps = [];			// the merge of the inner and outer jointMaps
+	limit = limit || Infinity;			// NB: not to be confused with limit in <attribute>
 	if(limit <= 0){
 		return then(null, {code:0, data:[]});
 	}
@@ -298,6 +298,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 			var next = function(err, result){
 				result = (result || {});
 				streamProps[idx].results = result.data  || [];	// NB: count is not expected in joins
+				streamProps[idx].resultsIdx = 0;
 				streamProps[idx].key = (result.keys || [])[0];
 				streamProps[idx].ord = result.ord;
 				streamProps[idx].jointMap = result.jointMap;
@@ -335,9 +336,10 @@ join.mergeStreams = function mergeStreams(join_config, then){
 							utils.logError(err, 'join.mergeStreams.3');
 							return then(error);
 						}
-						if(reln != '>'){
+						reln = reln || '<';
+						if(reln == '<' || (cursorReln == '=' && reln != '>')){
 							var func = streamConfigs[str].func.name || '';
-							var err = 'repetition detected; the cursor for '+func+'(stream['+str+']) is not behind next-fetch';
+							var err = 'repetition detected; new fetch for '+func+'(stream['+str+']) does not progress forward';
 							return then(err);
 						}
 					}
@@ -352,9 +354,14 @@ join.mergeStreams = function mergeStreams(join_config, then){
 						streamIndexes = [];
 						break;
 					}
-					if(i == -1){
-						// reset index and process past cycle
+					if(i == -1){	// loop over
 						i = streamIndexes.length-1;
+					}
+					var str = streamIndexes[i];
+					var idx = streamProps[str].resultsIdx;
+					if(boundIndexIdx != null && boundIndexIdx >= 0
+						&& ((i == 0 && joinType == 'fulljoin') || (str == boundIndexIdx && joinType == 'innerjoin'))){
+						// process past cycle
 						// check if any joins have been registered
 						// for fulljoin, the boundIndex is returned if it remains the min/max throughout the cycle
 						// for innerjoin, the boundIndex is returned if it makes all others in the cycle
@@ -367,25 +374,24 @@ join.mergeStreams = function mergeStreams(join_config, then){
 								joinData.push(boundIndexMask);
 							}
 							// terminate if enough results are accounted for
-							var accounted = (isRangeCount ? joinData : joinData.length);
+							//var accounted = (isRangeCount ? joinData : joinData.length);
 							//if(accounted >= limit){		// don't waste resultsets this way
 							//	// initiate termination
 							//	streamIndexes = [];
 							//	break;
 							//}
+						}else{	// i.e. incomplete innerjoin; other streams are still behind
+							continue;	// keep checking the other streams
 						}
 						// reset registers
-						if(joinType == 'fulljoin'){
-							streamProps[boundIndexIdx].resultsIdx = 1 + (streamProps[boundIndexIdx].resultsIdx || 0);
-						}else if(joinType == 'innerjoin'){
-							innerJoinCount = 0;
-						}
-						boundIndex = null;
+						//boundIndex = null;	// boundIndex value has to be retained as a cursor point
 						boundIndexIdx = -1;
 						boundIndexMask = {};
 					}
-					var str = streamIndexes[i];
-					var idx = streamProps[str].resultsIdx || 0;		// indexes are initially null
+					indexJM = streamJointMaps[str];
+					indexSM = streamJointMangles[str];
+					boundJM = streamJointMaps[boundIndexIdx];
+					boundSM = streamJointMangles[boundIndexIdx];
 					if(idx >= (streamProps[str].results || []).length){
 						var attrIdx = streamProps[str].attributeIdx;
 						var rangeLimit = streamProps[str].argsCopy[attrIdx].limit;
@@ -404,10 +410,27 @@ join.mergeStreams = function mergeStreams(join_config, then){
 							}
 						}else{	// if stream runs out of batch, the search pauses for refresh
 							// update the cursor of the args
-							var newCursorIndex = streamProps[str].results[idx-1];	// refresh should proceed beyond this
 							var cursorIdx = streamProps[str].cursorIdx;
 							var oldCursor = streamProps[str].argsCopy[cursorIdx];
-							if(oldCursor != null){
+							var newCursorIndex = null;
+							if(joinType == 'fulljoin'){
+								newCursorIndex = streamProps[str].results[idx-1];
+								cursorReln = '=';
+							}else if(joinType == 'innerjoin'){
+								newCursorIndex = boundIndex;
+								try{
+									var lastIndex = streamProps[str].results[idx-1];
+									cursorReln = datatype.getComparison(streamOrder, ord, lastIndex, boundIndex
+														, indexJM, boundJM, indexSM, boundSM);
+								}catch(error){
+									utils.logError(err, 'join.mergeStreams.4');
+									return then(error);
+								}
+							}
+							if(oldCursor == null){
+								oldCursor = new query.rangeConfig(newCursorIndex);
+								streamProps[str].argsCopy[cursorIdx] = oldCursor;
+							}else{
 								if(oldCursor.index == null){
 									oldCursor.index = {};
 								}
@@ -425,62 +448,56 @@ join.mergeStreams = function mergeStreams(join_config, then){
 										}
 									}
 								}
-							}else{
-								oldCursor = new query.rangeConfig(newCursorIndex);
-								streamProps[str].argsCopy[cursorIdx] = oldCursor;
 							}
-							oldCursor.excludeCursor = true;
+							if(cursorReln == '<'){
+								oldCursor.excludeCursor = false;
+							}else{
+								oldCursor.excludeCursor = true;
+							}
 							// initiate refresh
-							refreshIdx = i;						// continue from this iteration
+							refreshIdx = str;	// continue from this iteration
 							streamProps[str].results = null;
 							streamProps[str].resultsIdx = 0;
 							break;
 						}
 					}
 					var index = streamProps[str].results[idx];
-					var indexData = {};
-					var boundData = {};
-					indexJM = streamJointMaps[str];
-					boundJM = streamJointMaps[boundIndexIdx];
-					indexSM = streamJointMangles[str];
-					boundSM = streamJointMangles[boundIndexIdx];
 					var reln = null;
 					if(boundIndex != null){
 						try{
 							reln = datatype.getComparison(streamOrder, ord, index, boundIndex, indexJM, boundJM, indexSM, boundSM);
 						}catch(error){
-							utils.logError(err, 'join.mergeStreams.4');
+							utils.logError(err, 'join.mergeStreams.5');
 							return then(error);
 						}
 					}
-					if(boundIndex == null
-						|| joinType == 'innerjoin'
-						|| (joinType == 'fulljoin' && !(reln == '>'))){
-						if(boundIndex == null
-							|| (joinType == 'innerjoin' && reln == '>')
-							|| (joinType == 'fulljoin' && reln == '<')){
+					// NB: boundIndex itself may have a cursor
+					var isNotBounded = (boundIndex == null || (reln == '>' && (boundIndexIdx == null || boundIndexIdx < 0)));
+					if(isNotBounded
+						|| (joinType == 'fulljoin' && (reln == '<' || reln == '='))
+						|| (joinType == 'innerjoin' && (reln == '>' || reln == '='))){
+						if(isNotBounded || (joinType == 'innerjoin' && reln == '>') || (joinType == 'fulljoin' && reln == '<')){
+							// begin a new cycle
 							boundIndex = index;
 							boundIndexIdx = str;
 							if(!isRangeCount){
 								boundIndexMask = {};
 							}
-						}
-						if(reln == '=' || joinType == 'innerjoin'){		// always progressive
-							streamProps[str].resultsIdx = 1 + (streamProps[str].resultsIdx || 0);	
-						}
-						if(joinType == 'innerjoin'){
-							if(boundIndexIdx == str || reln == '>'){
+							if(joinType == 'innerjoin'){
 								innerJoinCount = 1;
-							}else if(reln == '='){
-								innerJoinCount++;
 							}
+						}else if(joinType == 'innerjoin' && reln == '='){
+							innerJoinCount++;
 						}
+						streamProps[str].resultsIdx = 1 + streamProps[str].resultsIdx;	
 						// NB: the different range-functions would yield different objects, hence props
 						// hence the merged-results has to be unified
 						// one idea is to push only ord props
 						// but callers may be interested in other fields e.g. for further joins
 						// so the props have to be merged; clashes have to be resolved with a namespace
-						if(!isRangeCount){
+						if(!isRangeCount && (isNotBounded 
+									|| (joinType == 'innerjoin' && reln == '>')
+									|| (joinType == 'fulljoin' && reln == '<'))){
 							// if boundIndexMask is empty add the joints
 							if(utils.isObjectEmpty(boundIndexMask)){
 								for(var k=0; k < joints.length; k++){
@@ -511,6 +528,8 @@ join.mergeStreams = function mergeStreams(join_config, then){
 								}
 							}
 						}
+					}else{
+						streamProps[str].resultsIdx = 1 + streamProps[str].resultsIdx;
 					}
 				}
 			}

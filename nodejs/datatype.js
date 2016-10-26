@@ -639,7 +639,8 @@ datatype.unsplitFieldValue = function datatypeUnsplitFieldValue(split, offset){
 		return split.join('');
 	}
 	offset = -1 * offset;
-	var isMultiSplit = (offset != null && (offset == 0 || Math.floor(offset/100) != 0));
+	// is there the prefix/trailer info, plus the main offset info?
+	var isMultiSplit = (offset != null && (offset == 0 || Math.trunc(offset/100) != 0));
 	if(offset < 0){
 		var prefixOffset = (offset == null || offset == -Infinity ? offset : offset%100);
 		var innerSplit = splitID(split[0], prefixOffset);
@@ -900,10 +901,13 @@ datatype.getConfigFieldOrdering = function getDatatypeConfigFieldOrdering(config
 		var cmp = [mask, offset];
 		// keytext
 	       	if(datatype.isConfigFieldKeySuffix(config, fieldIdx)){
-			if(datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
-				cmp[1] = null;
+			var offsetGroup = datatype.getConfigPropFieldIdxValue(config, 'offsetgroups', fieldIdx);
+			if(offsetGroup == null || offsetGroup == fieldIdx){
+				if(datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
+					cmp[1] = null;
+				}
+				keytext.push(cmp);
 			}
-			keytext.push(cmp);
 		}
 		if(!datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
 			// score
@@ -969,7 +973,7 @@ datatype.getComparison = function getDatatypeComparison(order, ord, index, ref, 
 			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0];
 			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
 				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-				refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
+				refVal = (refVal != null && refVal != '' ? parseFloat(refVal, 10) : -Infinity);
 			}else{
 				indexVal = (indexVal != null ? ''+indexVal : '');
 				refVal = (refVal != null ? ''+refVal : '');
@@ -1067,7 +1071,7 @@ datatype.getComparison = function getDatatypeComparison(order, ord, index, ref, 
 			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1];
 			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
 				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-				refVal = (refVal != null && indexVal != '' ? parseFloat(refVal, 10) : -Infinity);
+				refVal = (refVal != null && refVal != '' ? parseFloat(refVal, 10) : -Infinity);
 			}else{
 				indexVal = (indexVal != null ? ''+indexVal : '');
 				refVal = (refVal != null ? ''+refVal : '');

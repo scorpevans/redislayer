@@ -329,6 +329,7 @@ case 11:
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
 		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
+		// e.g. the config of zkey_membership requires a special type of ranging done with lua-scripting!!
 		var cmd = key.getCommand()[type];	// e.g. key.getCommand().rangeasc
 		var arg = {	cmd: cmd,
 				key: key,
@@ -411,7 +412,9 @@ case 10:
 	var case8Stream = new rl.streamConfig();
 	case8Stream.func = rangePartitions;
 	case8Stream.args = ['rangeasc', range7, attr7];			// NB: streams normally range (not count); else join doesn't make much sense
-	case8Stream.namespace = null;					// namespacing not necessary here since streams have equivalent fields
+	// providing namespaces for streams is highly recommended
+	// else there would be error when field values conflict
+	case8Stream.namespace = null;
 	case8Stream.jointMap = null;					// not required since both join-streams have the same field-names
 	case8Stream.cursorIndex = 1;
 	case8Stream.attributeIndex = 2;
@@ -442,10 +445,11 @@ case 11:
 	
 	console.log('\n#### CASE 11: full-join the ranges from case 8 and 9 ####');
 	joinConfig.setFulljoin();
-	// let's try namespacing
+	// let's try namespacing	// TODO fix
 	joinConfig.streamConfigs[0].namespace = 'case8';
 	joinConfig.streamConfigs[1].namespace = 'case9';
-	joinConfig.setjoints = new rl.joints(['groupid', 'entityid']);	// groupid (instead of memberid) to test the jointmap from the streams rangePartitions
+	// try groupid (instead of memberid) to test the jointmap from the streams rangePartitions
+	joinConfig.setjoints = new rl.joints(['groupid', 'entityid']);
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 		err = oopsCaseErrorResult('case11', err, result, true);
 		callback(err);
