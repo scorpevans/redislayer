@@ -448,8 +448,8 @@ case 11:
 	// let's try namespacing	// TODO fix
 	joinConfig.streamConfigs[0].namespace = 'case8';
 	joinConfig.streamConfigs[1].namespace = 'case9';
-	// try groupid (instead of memberid) to test the jointmap from the streams rangePartitions
-	joinConfig.setjoints = new rl.joints(['groupid', 'entityid']);
+	// try groupid (instead of entityid) to test the jointmap from the streams rangePartitions
+	joinConfig.setjoints = new rl.joints(['groupid', 'memberid']);
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 		err = oopsCaseErrorResult('case11', err, result, true);
 		callback(err);
