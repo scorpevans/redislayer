@@ -4,6 +4,7 @@
 var cluster = require('./cluster');
 var datatype = require('./datatype');
 var query = require('./query');
+var comparison = require('./comparison');
 var join = require('./join');
 var migrate = require('./migrate');
 
@@ -278,7 +279,7 @@ For join to be able to order resultsets, streams have to return the list of keys
 In case a resultset doesn't have the [keys] property, a so-called [ord] property can be provided as follows:
 	- if a Config is not available generate one with redislayer.createConfig; if it is not required that this config
 	is added to redislayer's store of configs, set arg.ontree=false; arg.struct may also be set to NULL.
-	- then use the config object's getFieldOrdering(jointMap, joints) method to generate an ord
+	- then call redislayer.getConfigFieldOrdering(config, jointMap, joints) method to generate an ord.
 */
 
 	/**
@@ -298,14 +299,32 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * @constructor
 	 * @return	{object}	a jointMap	
 	 */
-	jointMap: datatype.fieldMask,
+	jointMap: comparison.fieldMask,
 
-	/*
+	/* The joint object determines the range of fields to be used in checking the relative storage/retrieval ordering between objects.
+	 * WARNING: The @from param allows to ignore higher-order fields which the caller assures to be ordered
+	 *	This reduces administration of joinmaps (especially when out-of-focus higher-order fields are added later).
+	 *	However when the ordering of such ignored fields is broken, cursoring may go wrong, hence infinite loops may result
+         *	=> set @from IFF you can assure ordering of higher-order fields
+	 * Since partitioned fields are by default excluded from comparisons, required inclusions should be made with the setPartitions method.
+	 * The setPartitions method take a list of partitions which should be included in the ordering comparison.
 	 * @constructor
-	 * @param	{object}	the list of fields on which the join is to be performed; the order is not important
+	 * @param	{string}	from - the higher-ordering field from where the join is focused; NULL value recommended.
+	 * @param	{string}	to - the name of the least-ordering field; ordering would be checked until and including this field
 	 */
-	joints: join.joints,
+	joint: comparison.joint,
 		
+	/**
+	 * @param	{object}	arg -
+	 * @param	{object}	arg.config - the config on which the ordering should be based
+	 * @param	{object}	arg.jointmap - possible jointmap
+	 * @param	{object}	arg.joint - a joint object to demarcate the ordering comparison
+	 * @return	{object}	ord object
+	 */
+	getConfigFieldOrdering: function getConfigFieldOrdering(arg){
+		return comparison.getConfigFieldOrdering(arg.config, arg.jointmap, arg.joint);
+	},
+
 	/**
 	 * A streamConfig is created to express info about a stream used in a join.
 	 * The following fields have to be provided for streamConfigs:
@@ -333,7 +352,7 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 * 	- setModeList():	specify that the joined records should be listed
 	 * 	- setModeCount():	specify that only the counts of the joined records should be returned
 	 * 	- streamConfigs:	the list of streamConfigs involved in the join
-	 * 	- joints:	joints object
+	 * 	- joint:	joint object
 	 * 	- limit:	the number of results to return; useful even for setModeCount() for smart termination
 	 * @constructor
 	 * @return	{object}	a joinConfig
@@ -375,7 +394,7 @@ Migrating is simply the call to a function.
 	 *						- if a Config is not available generate one with redislayer.createConfig
 	 *						---- if it is not required that this config is added to redislayer's store of configs,
 	 *						     set arg.ontree=false; arg.struct may also be set to NULL.
-	 *						- then use the config object's getFieldOrdering(jointMap, joints) method to generate an ord
+	 *						- then call redislayer.getConfigFieldOrdering(config, jointMap, joints) method to generate an ord
 	 */
 
 };

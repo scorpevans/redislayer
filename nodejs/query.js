@@ -1,6 +1,7 @@
 var async = require('async');
 var utils = require('./utils');
 var cluster = require('./cluster');
+var comparison = require('./comparison');
 var datatype = require('./datatype');
 var command = datatype.command;
 var queryRedis = require('./query_redis');
@@ -497,6 +498,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 	var keyConfig = datatype.getKeyConfig(key);
 	var cmdType = command.getType(cmd);
 	var partitionCrossJoins = [];
+	var multiPartitionFields = [];
 	var indexClone = null;						// prevent mutating <index>
 	var ord = null;
 	var isRangeQuery = command.isOverRange(cmd);
@@ -508,10 +510,10 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		// NB: partitions allow use of e.g. flags without breaking ordering
 		indexClone = {};
 		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
-		var ord = datatype.getConfigFieldOrdering(keyConfig, null, null);
-		var keytext = datatype.getOrdProp(ord, 'keytext');
-		var score = datatype.getOrdProp(ord, 'score');
-		var uid = datatype.getOrdProp(ord, 'uid');
+		var ord = comparison.getConfigFieldOrdering(keyConfig, null, null);
+		var keytext = comparison.getOrdProp(ord, 'keytext');
+		var score = comparison.getOrdProp(ord, 'score');
+		var uid = comparison.getOrdProp(ord, 'uid');
 		var startProp = rangeConfig.startProp;
 		var stopProp = rangeConfig.stopProp;
 		var startPropScoreIdx = score.indexOf(startProp);
@@ -538,6 +540,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					delete indexClone[prop];				// don't use prop
 					continue;
 				}else{ // cross-join the values of the different partitioned props with array values
+					multiPartitionFields.push(prop);
 					if(partitionCrossJoins.length == 0){
 						// initialize
 						partitionCrossJoins = propValue.map(function(a){var b = {}; b[prop] = a; return b;});
@@ -603,7 +606,8 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 				var boundIndex = null;
 				var boundPartition = null;
 				var cmdOrder = command.getOrder(cmd);
-				ord = ord || datatype.getConfigFieldOrdering(keyConfig, null, null);
+				var isRecorded = {};	// used to unify partition-ranges		
+				ord = ord || comparison.getConfigFieldOrdering(keyConfig, null, null);
 				for(var i=pcjIndexes.length-1; true; i--){
 					if(pcjIndexes.length == 0){
 						break;
@@ -612,14 +616,15 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 						i = pcjIndexes.length - 1;		// reset cycle
 						if(boundIndex != null){			// return the least index across the partitions during the last cycle
 							mergeData.push(boundIndex);
+							// reset boundIndex for next comparison cycle
+							// else how could higher indexes be less-than the previous boundIndex
+							partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
+							boundIndex = null;
+							isRecorded = {};
+							boundPartition = null;
 							//if(mergeData.length >= limit){// don't waste resultsets this way
 							//	break;
 							//}
-							partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
-							// reset boundIndex for next comparison cycle
-							// else how could higher indexes be less-than the previous boundIndex
-							boundIndex = null;
-							boundPartition = null;
 						}else{	// eof
 							break;
 						}
@@ -642,14 +647,33 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					var indexJM = null;				// same fields; no need for jointmap here
 					var reln = null;
 					if(boundIndex != null){
-						reln = datatype.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
+						reln = comparison.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
 					}
 					if(boundIndex == null || reln == '<'){
 						boundPartition = part;
-						boundIndex = index;
+						boundIndex = utils.shallowCopy(index);	// index would be mutated, but may be deferred later on '<'
+						// convert partition-range fields to an array
+						// i.e. {part:0} => {part:[0]}
+						// NB: retain data-type e.g. don't use dict keys for getting distinct values
+						for(var k=0; k < multiPartitionFields.length; k++){
+							var pf = multiPartitionFields[k];
+							var val = index[pf];
+							boundIndex[pf] = [val];
+							isRecorded[val] = true;
+						}
 					}else if(reln == '='){
 						// NB: keep in mind partitions are not used in merging here
 						// values may be exactly the same or may differ on the partitioned fields
+						// convert partition-range fields to an array
+						// i.e. {part:0} <-> {part:1} => {part:[0,1]}
+						for(var k=0; k < multiPartitionFields.length; k++){
+							var pf = multiPartitionFields[k];
+							var val = index[pf];
+							if(!isRecorded[val]){
+								boundIndex[pf].push(val);
+								isRecorded[val] = true;
+							}
+						}
 						partitionIdx[part] = 1 + (partitionIdx[part] || 0);
 					}
 				}

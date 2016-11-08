@@ -292,7 +292,7 @@ case 5:
 case 6:
 	console.log('\n#### CASE 6: query for existing and non-existing objects ####');
 	var key = rl.getKey().hkey_user;
-				// non- 999 prefixes don't exist; non-000 suffixes don't exist
+				// non-999 prefixes don't exist; non-000 suffixes don't exist
 	var indexList = [	{index:{entityid: 999188000, firstnames:null, lastnames:null}},
 				{index:{entityid: 999118000, firstnames:null, lastnames:null}},
 				{index:{entityid: 99952000, firstnames:null, lastnames:null}},
@@ -316,7 +316,7 @@ case 6:
 
 // EXERCISE: note that ranging can potentially be across partitions, key-chains and clusters
 //	- note how the range-properties are used to configure the range-index
-//	- note how range partitions are specified
+//	- note how range partitions are specified; and note that the result also have a list value
 //	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
 //	- note the possible inclusions of the [keys] and [jointMap] fields to resultsets for later joins
 
@@ -328,8 +328,8 @@ case 11:
 	rangePartitions = function rangePartitions(type, cursor, attribute, cb){
 		var key = rl.getKey().zkey_membership;
 		// redislayer will figure out the variant of range to use (rangebyscore/rangebylex/etc)
-		// or we can specify i.e. .bylex/.byscore/etc; but results will be wrong if this doesn't match the key-config
-		// e.g. the config of zkey_membership requires a special type of ranging done with lua-scripting!!
+		// or we can specify with .bylex/ or .byscore etc; but results will be wrong if this doesn't match the key-config
+		// 	e.g. the config of zkey_membership requires a special type of ranging done with lua-scripting!!
 		var cmd = key.getCommand()[type];	// e.g. key.getCommand().rangeasc
 		var arg = {	cmd: cmd,
 				key: key,
@@ -337,15 +337,16 @@ case 11:
 				attribute:attribute,
 				};
 		rl.singleIndexQuery(arg, function(err, result){
+			// we will use the results of this function for joins
 			// joins require info on the sorting order of resultset
 			// hence all resultsets used in joins must have [keys] field of resultset keys
 			// see resultsetCallback in redislayer.js for info in case the resultset doesn't come from redislayer
 			//result.keys = [key];		// already included with redislayer queries
-			// let's be nice and add a jointmap to the resultset
+			// let's add a jointmap to the resultset
 			// this is the way to standardize fields for callers who use this function as a join-stream
 			// the other way is that the callers themselves provide a jointmap when joining
 			var jointMap = new rl.jointMap();
-			jointMap.addMaskToField('groupid', 'entityid');
+			jointMap.addMaskToField('user', 'memberid');
 			result.jointMap = jointMap;
 			cb(err, result);
 		});
@@ -407,33 +408,37 @@ case 9:
 
 // MERGERS
 
+// EXERCISE: note that joins can be made over joins over joins ...
+//	- note the use of the jointMap; note it can be provided along with the stream's resultset or when joining
+//	- note the use of namespacing
+//	-     without namespaces conflicting field-names are mangled; joint-fields are always merged under the name of the joints
+//	-     you don't want automatic mangling of field-names because you can't rely any names for further joins
+
 case 10:
 
 	var case8Stream = new rl.streamConfig();
 	case8Stream.func = rangePartitions;
 	case8Stream.args = ['rangeasc', range7, attr7];			// NB: streams normally range (not count); else join doesn't make much sense
-	// providing namespaces for streams is highly recommended
-	// else there would be error when field values conflict
-	case8Stream.namespace = null;
-	case8Stream.jointMap = null;					// not required since both join-streams have the same field-names
 	case8Stream.cursorIndex = 1;
 	case8Stream.attributeIndex = 2;
+	case8Stream.namespace = null;
+	case8Stream.jointMap = null;					// aliasing not required since both join-streams have the same field-names
 	var case9Stream = new rl.streamConfig();
 	case9Stream.func = rangePartitions;
 	case9Stream.args = ['rangeasc', range9, attr9];
-	case9Stream.namespace = null;
-	case9Stream.jointMap = null;
 	case9Stream.cursorIndex = 1;
 	case9Stream.attributeIndex = 2;
+	case9Stream.namespace = null;
+	case9Stream.jointMap = null;
 	joinConfig = new rl.joinConfig();
 	joinConfig.setInnerjoin();
 	joinConfig.setOrderAsc();					// NB: this must match the range direction of the streams
 	joinConfig.setModeList();
 	joinConfig.streamConfigs = [case8Stream, case9Stream];
-	joinConfig.joints = new rl.joints(['memberid', 'entityid']);	// order is irrelevant; redislayer knows better from key-configs
+	joinConfig.joint = new rl.joint(null, 'memberid');		// the from-to range that the join focuses on
 	joinConfig.limit = 20;						// NB: this is useful even in case of modeCount()
 	if(cases[sequence] == 10){
-		console.log('\n#### CASE 10: inner-join the ranges from case 8 and 9 ####');
+		console.log('\n#### CASE 10: inner-join the ranges from cases 8 and 9 ####');
 		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 			err = oopsCaseErrorResult('case10', err, result, true);
 			callback(err);
@@ -443,13 +448,17 @@ case 10:
 
 case 11:
 	
-	console.log('\n#### CASE 11: full-join the ranges from case 8 and 9 ####');
+	console.log('\n#### CASE 11: full-join the ranges from cases 8 and 9  ####');
 	joinConfig.setFulljoin();
-	// let's try namespacing	// TODO fix
+	// let's try namespacing
 	joinConfig.streamConfigs[0].namespace = 'case8';
 	joinConfig.streamConfigs[1].namespace = 'case9';
-	// try groupid (instead of entityid) to test the jointmap from the streams rangePartitions
-	joinConfig.setjoints = new rl.joints(['groupid', 'memberid']);
+	// try [user] (instead of memberid) to test the jointmap from the resultset of the stream rangePartitions
+	joinConfig.joint = new rl.joint('entityid', 'user');		// NB: not recommended to set @from parameter of joints; see docs
+	// let's provide a redundant jointMap for one of the streams; just as a showcase of jointMap-creation
+	//	this is not necessary because the resultsets of the streams provide one
+	joinConfig.streamConfigs[0].jointMap = new rl.jointMap();
+	joinConfig.streamConfigs[0].jointMap.addMaskToField('user', 'memberid');
 	rl.mergeStreams({joinconfig:joinConfig}, function(err, result){
 		err = oopsCaseErrorResult('case11', err, result, true);
 		callback(err);
