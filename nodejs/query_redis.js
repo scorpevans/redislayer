@@ -12,6 +12,7 @@ var query_redis = {
 var separator_key = datatype.getKeySeparator();
 var separator_detail = datatype.getDetailSeparator();
 var collision_breaker = datatype.getCollisionBreaker();
+var redisMaxScoreFactor = datatype.getRedisMaxScoreFactor();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 
@@ -22,10 +23,12 @@ var label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possi
 processPaddingForZsetUID = function processPaddingForZsetUID(struct, type, val){
 	// NB: it is crucial to leave NULL values untouched; '' may mean a something for callers
 	if(val != null){
+		val = val+'';
 		if(struct == 'zset' && (type == 'float' || type == 'integer')){
-			val = Array((Math.floor(val)+'').length).join('a') + val;	// e.g. 13.82 -> a13.82
-		}else{
-			val = ''+val;
+			// NB: preceding zeros are significant, since in case of splits these may actually not be preceding
+			// 	in case of no prefix splits, numbers should not be preceeded by zeros
+			var wholeNumber = val.slice(0, (val+'.').indexOf('.'))
+			val = Array(wholeNumber.length).join('a') + val;	// e.g. 13.82 -> a13.82
 		}
 	}
 	return val;
@@ -224,11 +227,8 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 
 removePaddingFromZsetUID = function removePaddingFromZsetUID(val){
 	if(val){
-		var len = val.indexOf('.');
-		if(len < 0){
-			len = val.length;
-		}
-		val = val.slice(Math.floor((len-1)/2));
+		// just remove preceding a's
+		val = val.slice(1+val.lastIndexOf('a'))
 	}else{
 		val = null;
 	}

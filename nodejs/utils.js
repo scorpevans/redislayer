@@ -10,7 +10,7 @@ utils.shallowCopy = function shallowCopy(myDict){
 
 
 utils.isObjectEmpty = function isObjectEmpty(obj) {
-	for (var prop in obj){
+	for (var prop in (obj || {})){
 		if(obj.hasOwnProperty(prop)){
 			return false;
 		}

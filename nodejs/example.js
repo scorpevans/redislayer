@@ -316,7 +316,7 @@ case 6:
 
 // EXERCISE: note that ranging can potentially be across partitions, key-chains and clusters
 //	- note how the range-properties are used to configure the range-index
-//	- note how range partitions are specified; and note that the result also have a list value
+//	- note how range partitions are specified
 //	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
 //	- note the possible inclusions of the [keys] and [jointMap] fields to resultsets for later joins
 

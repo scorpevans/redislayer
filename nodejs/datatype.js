@@ -682,6 +682,8 @@ datatype.getConfigFieldPrefactor = function getDatatypeConfigFieldPrefactor(conf
 };
 
 
+// TODO consider appending such flags directly to the command dict; especially command.requiresXID and command.requiresUID
+
 command.getRangeMode = function getCommandRangeMode(cmd){
 	var cmdType = command.getType(cmd);
 	if(cmdType.slice(-11) == 'byscorelexz'){
@@ -696,8 +698,6 @@ command.getRangeMode = function getCommandRangeMode(cmd){
 		return null;
 	}
 };
-
-// TODO consider appending such flags directly to the command dict; especially command.requiresXID and command.requiresUID
 
 // command which run over a certain range
 command.isOverRange = function isCommandOverRange(cmd){
@@ -721,7 +721,7 @@ command.requiresXID = function requiresCommandXID(cmd){
 	return false;
 };
 
-var uidCommandPrefixes = ['add', 'incr', 'decr', 'get', 'upsert', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
+var uidCommandPrefixes = ['add', 'del', 'incr', 'decr', 'get', 'upsert', 'ismember', 'rangebylex', 'countbylex', 'rankbylex', 'delrangebylex'];
 command.requiresUID = function requiresCommandUID(cmd){
 	var cmdType = command.getType(cmd);
 	// string/key struct doesn't take UID

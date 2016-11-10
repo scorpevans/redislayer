@@ -498,7 +498,6 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 	var keyConfig = datatype.getKeyConfig(key);
 	var cmdType = command.getType(cmd);
 	var partitionCrossJoins = [];
-	var multiPartitionFields = [];
 	var indexClone = null;						// prevent mutating <index>
 	var ord = null;
 	var isRangeQuery = command.isOverRange(cmd);
@@ -509,17 +508,6 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		// execute the different partitions separately and merge the results
 		// NB: partitions allow use of e.g. flags without breaking ordering
 		indexClone = {};
-		// if the property is out-of-bounds (i.e. shouldn't play a role in range) ignore it altogether
-		var ord = comparison.getConfigFieldOrdering(keyConfig, null, null);
-		var keytext = comparison.getOrdProp(ord, 'keytext');
-		var score = comparison.getOrdProp(ord, 'score');
-		var uid = comparison.getOrdProp(ord, 'uid');
-		var startProp = rangeConfig.startProp;
-		var stopProp = rangeConfig.stopProp;
-		var startPropScoreIdx = score.indexOf(startProp);
-		var startPropUIDIdx = uid.indexOf(startProp);
-		var stopPropScoreIdx = score.indexOf(stopProp);
-		var stopPropUIDidx = uid.indexOf(stopProp);
 		for(var prop in index){								// NB: some of these props are stray/unknown
 			var propIndex = datatype.getConfigFieldIdx(keyConfig, prop);
 			var propValue = index[prop];
@@ -532,15 +520,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					// without declaration, it's assumed array is indeed raw value
 					// this should also apply to stray/extraneous props
 					continue;
-				}else if(!(keytext.indexOf(prop) >= 0)		// prop is not essential to resolving the keyText
-					&& (startPropScoreIdx >= 0 && startPropScoreIdx > score.indexOf(prop))	// out-of-bounds of query
-					&& (startPropUIDIdx >= 0 && startPropUIDIdx > uid.indexOf(prop))
-					&& (stopPropScoreIdx >= 0 && stopPropScoreIdx > score.indexOf(prop))
-					&& (stopPropScoreIdx >=0 && stopPropScoreIdx > uid.indexOf(prop))){
-					delete indexClone[prop];				// don't use prop
-					continue;
 				}else{ // cross-join the values of the different partitioned props with array values
-					multiPartitionFields.push(prop);
 					if(partitionCrossJoins.length == 0){
 						// initialize
 						partitionCrossJoins = propValue.map(function(a){var b = {}; b[prop] = a; return b;});
@@ -588,7 +568,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		var partitionIdx = [];
 		var pcjIndexes = Object.keys(partitionCrossJoins);
 		var limit = (attribute || {}).limit || Infinity;
-		var mergeData = [];
+		var mergeData = null;
 		async.each(pcjIndexes, function(idx, callback){
 			var pcj = partitionCrossJoins[idx];
 			for(var prop in pcj){
@@ -602,87 +582,64 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		}, function(err){
 			var ret = {code:1};
 			if(!utils.logError(err, 'query.singleIndexQuery')){
-				// compare next values across the partitions and pick the least
-				var boundIndex = null;
-				var boundPartition = null;
-				var cmdOrder = command.getOrder(cmd);
-				var isRecorded = {};	// used to unify partition-ranges		
-				ord = ord || comparison.getConfigFieldOrdering(keyConfig, null, null);
-				for(var i=pcjIndexes.length-1; true; i--){
-					if(pcjIndexes.length == 0){
-						break;
-					}
-					if(i == -1){
-						i = pcjIndexes.length - 1;		// reset cycle
-						if(boundIndex != null){			// return the least index across the partitions during the last cycle
-							mergeData.push(boundIndex);
-							// reset boundIndex for next comparison cycle
-							// else how could higher indexes be less-than the previous boundIndex
-							partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
-							boundIndex = null;
-							isRecorded = {};
-							boundPartition = null;
-							//if(mergeData.length >= limit){// don't waste resultsets this way
-							//	break;
-							//}
-						}else{	// eof
+				if(utils.startsWith(cmdType, 'count')){
+					mergeData = partitionResults.reduce(function(a,b){return a+b;});
+				}else{	// compare next values across the partitions and pick the least
+					var boundIndex = null;
+					var boundPartition = null;
+					var cmdOrder = command.getOrder(cmd);
+					var ord = comparison.getConfigFieldOrdering(keyConfig, null, null);
+					mergeData = [];
+					// it's essential to iterate backwards, due to slicing
+					for(var i=pcjIndexes.length-1; true; i--){
+						if(pcjIndexes.length == 0){
 							break;
 						}
-					}
-					var part = pcjIndexes[i];
-					var idx = partitionIdx[part] || 0;		// indexes are initially null
-					if(idx >= (partitionResults[part] || []).length){
-						// if a partition runs out of results
-						// we can continue with other partitions IFF the current partition is completely out
-						// otherwise further results may present some prior object to values in remaining partitions
-						// hence putting any of the remaining values next may be false
-						if((partitionResults[part] || []).length < (limit || Infinity)){
-							pcjIndexes.splice(part, 1);
-							continue;
-						}else{
-							break;
-						}
-					}
-					var index = partitionResults[part][idx];
-					var indexJM = null;				// same fields; no need for jointmap here
-					var reln = null;
-					if(boundIndex != null){
-						reln = comparison.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
-					}
-					if(boundIndex == null || reln == '<'){
-						boundPartition = part;
-						boundIndex = utils.shallowCopy(index);	// index would be mutated, but may be deferred later on '<'
-						// convert partition-range fields to an array
-						// i.e. {part:0} => {part:[0]}
-						// NB: retain data-type e.g. don't use dict keys for getting distinct values
-						for(var k=0; k < multiPartitionFields.length; k++){
-							var pf = multiPartitionFields[k];
-							var val = index[pf];
-							boundIndex[pf] = [val];
-							isRecorded[val] = true;
-						}
-					}else if(reln == '='){
-						// NB: keep in mind partitions are not used in merging here
-						// values may be exactly the same or may differ on the partitioned fields
-						// convert partition-range fields to an array
-						// i.e. {part:0} <-> {part:1} => {part:[0,1]}
-						for(var k=0; k < multiPartitionFields.length; k++){
-							var pf = multiPartitionFields[k];
-							var val = index[pf];
-							if(!isRecorded[val]){
-								boundIndex[pf].push(val);
-								isRecorded[val] = true;
+						if(i == -1){
+							i = pcjIndexes.length-1;	// reset cycle
+							if(boundIndex != null){		// return the least index across the partitions during the last cycle
+								mergeData.push(boundIndex);
+								// reset boundIndex for next comparison cycle
+								// else how could higher indexes be less-than the previous boundIndex
+								partitionIdx[boundPartition] = 1 + (partitionIdx[boundPartition] || 0);
+								boundIndex = null;
+								boundPartition = null;
+								//if(mergeData.length >= limit){// don't waste resultsets this way
+								//	break;
+								//}
+							}else{	// eof
+								break;
 							}
 						}
-						partitionIdx[part] = 1 + (partitionIdx[part] || 0);
+						var part = pcjIndexes[i];
+						var idx = partitionIdx[part] || 0;	// indexes are initially null
+						if(idx >= (partitionResults[part] || []).length){
+							// if a partition runs out of results
+							// we can continue with other partitions IFF the current partition is completely out
+							// otherwise further results may present some prior object to values in remaining partitions
+							// hence putting any of the remaining values next may be false
+							if((partitionResults[part] || []).length < (limit || Infinity)){
+								pcjIndexes.splice(part, 1);
+								continue;
+							}else{
+								break;
+							}
+						}
+						var index = partitionResults[part][idx];
+						var indexJM = null;			// same fields; no need for jointmap here
+						var reln = null;
+						if(boundIndex != null){
+							reln = comparison.getComparison(cmdOrder, ord, index, boundIndex, indexJM, indexJM, null, null);
+						}
+						// NB: if reln == '=', it would be processed later
+						if(boundIndex == null || reln == '<'){
+							boundPartition = part;
+							boundIndex = index;
+						}
 					}
 				}
-				if(utils.startsWith(cmdType, 'count')){
-					ret = {code:0, data:mergeData.length, keys:keys};
-				}else{
-					ret = {code:0, data:mergeData, keys:keys};
-				}
 			}
+			ret = {code:0, data:mergeData, keys:keys};
 			then(err, ret);	
 		});
 	}
