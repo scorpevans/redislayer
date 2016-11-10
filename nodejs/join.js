@@ -234,9 +234,9 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamProps[i].attributeIdx = attrIdx;
 		if((streamProps[i].argsCopy[attrIdx]||{}).limit == null){
 			streamProps[i].argsCopy[attrIdx] = utils.shallowCopy(streamProps[i].argsCopy[attrIdx]) || {};	// make a copy
-			streamProps[i].argsCopy[attrIdx].limit = 1;//limit || defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
 		}else if(streamProps[i].argsCopy[attrIdx].limit < limit){
-			streamProps[i].argsCopy[attrIdx].limit = 1;//limit || defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
 		}
 		streamProps[i].argsCopy.push('/*callback-place-holder*/');
 	}
