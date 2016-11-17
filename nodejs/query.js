@@ -507,6 +507,17 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 		// querying fields with partitions is tricky
 		// execute the different partitions separately and merge the results
 		// NB: partitions allow use of e.g. flags without breaking ordering
+		var cmdOrder = command.getOrder(cmd);
+		var startProp = rangeConfig.startProp;
+		var startPropIndex = datatype.getConfigFieldIdx(keyConfig, startProp);
+		var startPropIsAddend = datatype.isConfigFieldScoreAddend(keyConfig, startPropIndex);
+		var startPropScoreAddend = datatype.getConfigIndexProp(keyConfig, 'factors', startPropIndex);
+		var startPropPrependsUID = datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex);
+		var stopProp = rangeConfig.stopProp;
+		var stopPropIndex = datatype.getConfigFieldIdx(keyConfig, stopProp);
+		var stopPropIsAddend = datatype.isConfigFieldScoreAddend(keyConfig, stopPropIndex);
+		var stopPropScoreAddend = datatype.getConfigIndexProp(keyConfig, 'factors', stopPropIndex);
+		var stopPropPrependsUID = datatype.isConfigFieldUIDPrepend(keyConfig, stopPropIndex);
 		indexClone = {};
 		for(var prop in index){								// NB: some of these props are stray/unknown
 			var propIndex = datatype.getConfigFieldIdx(keyConfig, prop);
@@ -520,7 +531,48 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					// without declaration, it's assumed array is indeed raw value
 					// this should also apply to stray/extraneous props
 					continue;
-				}else{ // cross-join the values of the different partitioned props with array values
+				}else{
+					// partitions must be handled well w.r.t. the query-range else duplicate fetches would be made
+					/*	   p1   start    p2   stop     p3
+						---|------|------|------|------|--->
+						   p1	stop'    p2'  start'   p3
+						p1 is well within scope, p3 is out-of-scope, p2 requires only max/min value and distinct keysuffixes
+					*/
+					var propIsAddend = datatype.isConfigFieldScoreAddend(keyConfig, propIndex);
+					var propScoreAddend = datatype.getConfigIndexProp(keyConfig, 'factors', propIndex);
+					var propPrependsUID = datatype.isConfigFieldUIDPrepend(keyConfig, propIndex);
+					var isPropKeySuffix = datatype.isConfigFieldKeySuffix(keyConfig, propIndex);
+					var outOfStartScope = startProp
+								&& (!propIsAddend || (startPropIsAddend && startPropScoreAddend > propScoreAddend))
+								&& (!propPrependsUID || (startPropPrependsUID && startPropIndex < propIndex));
+					var outOfStopScope = stopProp
+								&& (!propIsAddend || (stopPropIsAddend && stopPropScoreAddend > propScoreAddend))
+								&& (!propPrependsUID || (stopPropPrependsUID && stopPropIndex < propIndex));
+					if(outOfStartScope || outOfStopScope){
+						if(outOfStartScope && outOfStopScope){	// case p3
+							if(!isPropKeySuffix){
+								continue;		// NB: prop could still be a fieldbranch
+							}else{	// prop is required to resolve keyText
+								// retain only enough values to cover distinct keysuffixes
+								var uniq = [];
+								var keysuffixes = {};
+								var myIndex = {};
+								for(var j=0; j < propValue.length; j++){
+									myIndex[prop] = propValue[j];
+									var splits = datatype.splitConfigFieldValue(keyConfig, myIndex, prop);
+									if(!(splits[0] in keysuffixes)){
+										keysuffixes[splits[0]] = true;
+										uniq.push(propValue[j]);
+									}
+								}
+								propValue = uniq;
+							}
+						}else{					// cases p2 & p2'
+							var error = 'cannot decipher range query with partitions between start and stop props';
+							return then(error);
+						}
+					}
+					// cross-join the values of the different partitioned props with array values
 					if(partitionCrossJoins.length == 0){
 						// initialize
 						partitionCrossJoins = propValue.map(function(a){var b = {}; b[prop] = a; return b;});

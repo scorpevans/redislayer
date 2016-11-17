@@ -319,6 +319,26 @@ getPropFieldIdxValue = function getConfigPropFieldIdxValue(prop, field_idx){
 };
 
 datatype.createConfig = function createDatatypeConfig(id, struct, index_config, on_tree){
+	// enforce rules on index_config
+	// 1. partition fields should be placed on high-order end i.e. LHS
+	// this give more control for future queries
+	var engaged = false;
+	var partitions = index_config.partitions || [];
+	for(var i=0; i < partitions.length; i++){
+		if(partitions[i] != true){
+			engaged = true;
+		}else if(engaged){
+			var error = 'partition fields should be put in the left-hand-side before non-partitions in the config: '+id;
+			throw new Error(error);
+		}
+	}
+	// 2. all fields should have Types
+	for(var i=0; i < index_config.fields.length; i++){
+		if(!(index_config.types || [])[i]){
+			var error = 'provide a type for each field in the config: '+id;
+			throw new Error(error);
+		}
+	}
 	var structConfig = (on_tree == false || struct == null ? {} : struct.getConfig());
 	var store = {api:structConfig, keyconfig:{}, keywrap:{}};
 	var dict = {};
