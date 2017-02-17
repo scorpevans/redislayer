@@ -1,5 +1,4 @@
 var utils = require('./utils');
-var cluster = require('./cluster');
 var datatype = require('./datatype');
 var command = datatype.command;
 
@@ -34,7 +33,7 @@ processPaddingForZsetUID = function processPaddingForZsetUID(struct, type, val){
 	return val;
 }
 // TODO most of the computations on configs could be cached in redislayer to reduce parse computations
-query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStorageAttributes(key, cmd, index){
+query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStorageAttributes(key, meta_cmd, index){
 	// for <xid>, distinguish between 0 and null for zrangebyscore
 	// that is xid=null would be a hint that zrangebylex should be used instead
 	var usual = 'usual';
@@ -43,18 +42,19 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 	var mainFieldBranch = null;
 	var xid = {usual: null, branch: []};
 	var luaArgs = {usual: [], branch: []}; 
-	var keySuffixes = {usual: [], branch: []}; 
+	var keyFieldSuffixes = {usual: [], branch: []}; 
 	var uidPrefixes = {usual: [], branch: []};
 	var xidPrefixes = {usual: [], branch: []};
 	var keyConfig = datatype.getKeyConfig(key);
 	var struct = datatype.getConfigStructId(keyConfig);
-	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
 	var indexFields = Object.keys(index);
 	var fields = datatype.getConfigIndexProp(keyConfig, 'fields') || [];			// fields sorted by index
+	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
+	var offsetgroups = datatype.getConfigIndexProp(keyConfig, 'offsetgroups') || [];
 	// using the defined fields is a better idea than using the currently provided possibly-partial or even extraneous fields
 	// it uniformly treats every index argument with complete field-set, albeit some having NULL values
 	// this is safer; fields have fixed ordering and positions!
-	// for example, note that absent fields may still make an entry in keySuffixes!!
+	// for example, note that absent fields may still make an entry in keyFieldSuffixes!!
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
 		if(!(field in index)){
@@ -65,26 +65,39 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		var splits = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
 		// key suffixes and branches
 		var type = usual;
-		var fld = splits[2];
+		var fieldBranch = splits[2];
 		// NB: this must be parsed even if the value of the index.$field is <null>
-		// else how do you direct/indicate choice of key for getter queries?!
-		if(fld != null && indexFields.indexOf(fld) >= 0){	// unusual case
+		// else how do you direct/indicate choice of key (for fieldBranches) for getter queries?!
+		if(fieldBranch != null && indexFields.indexOf(fieldBranch) >= 0){	// unusual case
 			type = branch;
-			keyBranches.push(fld);
+			keyBranches.push(fieldBranch);
 		}
-		if(splits[0] != null){
-			// don't prefix nulls
-			// NB: empty strings are still concatenated
+		if(datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex)){
+			// NB: empty strings are still generated/concatenated in case of NULL keySuffix-fields
+			// a distinction has to be made between empty index and empty suffix
+			// empty index => ranges start from min/max for fields, whereas empty suffix is specific
+			if(!splits[0]){
+				if((index || {})[field] == null && command.isOverRange(meta_cmd)){
+					var cmdOrder = command.getOrder(meta_cmd);
+					splits[0] = datatype.getKeyFieldBoundChain(key, field, cmdOrder);
+				}else{
+					splits[0] = '';
+				}
+			}
 			// use fieldIndex for ordering but remember there may be gaps (i.e. ['', ,'234']) to be removed
-			var offsetGroupIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'offsetgroups', fieldIndex);
+			var offsetGroupIndex = offsetgroups[fieldIndex];
 			if(offsetGroupIndex == null){
 				offsetGroupIndex = fieldIndex;
 			}
 			// NB: only set once; keysuffix of other offsetgroups would be ignored!
 			// 	datatype.splitConfigFieldValue takes care of returning the keysuffix of the first non-null offsetgroup field
 			// this means once any offsetgroup field is given a value, it must be sufficient to define the keysuffix
-			if(keySuffixes[type][offsetGroupIndex] == null){
-				keySuffixes[type][offsetGroupIndex] = splits[0];
+			if(keyFieldSuffixes[type][offsetGroupIndex] == null){
+				var valueFieldIdx = splits[3];	// the field within the offsetgroup whose value was used
+				// FYI array format used for RHS since values are concated with others later
+				// NB: valueFieldIdx potentially breaks the ordering of fieldidx in the list
+				//	=> consumers should rely on the list's index for ordering keysuffixes
+				keyFieldSuffixes[type][offsetGroupIndex] = [{keysuffix:splits[0], fieldidx:valueFieldIdx}];
 			}
 		}
 		// xid and uid
@@ -94,7 +107,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 			// for zset, prefix floats with 'a's so they maintain their sorting; see datatype.getConfigOrdering
 			var mytype = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
 			var pad = processPaddingForZsetUID(struct, mytype, splits[1]) || '';
-			uidPrefixes[type][fieldIndex] = pad;
+			uidPrefixes[type][fieldIndex] = [{uidprefix:pad, fieldidx:fieldIndex}];
 		}
 		if(struct == 'zset'){
 			if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
@@ -103,7 +116,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 					if(type == usual){
 						xid[type] = (xid[type] || 0) + addend;
 					}else{
-						xid[type][fld] = (xid[type][fld] || 0) + addend; 
+						xid[type][fieldBranch] = (xid[type][fieldBranch] || 0) + addend; 
 					}
 				}
 			}
@@ -117,10 +130,10 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 			xidPrefixes[type][fieldIndex] = (splits[1] != null ? splits[1]+'' : '');
 		}
 		// NB: upsert can NOT cause changes in key/keysuffix
-		// since keySuffixes+UID are required to be complete in order to identify target
+		// since keyFieldSuffixes+UID are required to be complete in order to identify target
 		// => in case upsert is tried on such fields, only the non-keysuffix portion is updated
-		//	as it turns out, this prevents offsetgroups from updating keysuffixes which subsumes their contribution
-		if(utils.startsWith(command.getType(cmd), 'upsert')){
+		//	as it turns out, this fortunately prevents offsetgroups from updating keysuffixes which subsumes their contribution
+		if(utils.startsWith(command.getType(meta_cmd), 'upsert')){
 			if(struct == 'zset'){
 				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 					var outOfBounds = 1000*redisMaxScoreFactor;		// just large enough
@@ -145,19 +158,36 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		var addend = null;
 		if(!isBranch){
 			// for 'usual' fields, append non-null values to both 'usual' ...
-			var structs = [keySuffixes, uidPrefixes, xidPrefixes];
-			var delimiters = [separator_key, separator_detail, separator_detail];
+			var structs = [keyFieldSuffixes, uidPrefixes, xidPrefixes];
+			var delimiters = [null, separator_detail, separator_detail];	// null delimiter => array storage instead of string
 			for(s=0; s < structs.length; s++){
 				var str = structs[s];
 				var del = delimiters[s];
-				if(str[type][fieldIndex] != null){
-					addend = (str[usual][0] != null ? str[type][0] + del : '');
-					str[type][0] = addend + str[type][fieldIndex];
+				var elem = str[type][fieldIndex];
+				if(elem != null){
+					if(del == null){
+						if(str[type][0] == null){
+							str[type][0] = [];
+						}
+						[].push.apply(str[type][0], elem);
+					}else{
+						addend = (str[usual][0] != null ? str[type][0] + del : '');
+						str[type][0] = addend + elem;
+					}
 					//  ... and append also to 'branches'
 					for(j=0; j < i; j++){
+						// go through field-branches before current field
+						// field-branches after current field remain unprocessed
 						if(datatype.isConfigFieldBranch(keyConfig, j)){
-							addend = (str[branch][j] != null ? str[branch][j] + del : '');
-							str[branch][j] = addend + str[type][fieldIndex];
+							if(del == null){
+								if(str[branch][j] == null){
+									str[branch][j] = [];
+								}
+								[].push.apply(str[branch][j], elem);
+							}else{
+								addend = (str[branch][j] != null ? str[branch][j] + del : '');
+								str[branch][j] = addend + elem;
+							}
 						}
 					}
 				}
@@ -169,6 +199,8 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 					luaArgs[usual][0] = luaArgs[type][fieldIndex].concat([]);
 				}
 				for(j=0; j < i; j++){
+					// go through field-branches before current field
+					// field-branches after current field remain unprocessed
 					if(datatype.isConfigFieldBranch(keyConfig, j)){
 						if(luaArgs[branch][j] != null){
 							[].push.apply(luaArgs[branch][j], luaArgs[type][fieldIndex]);
@@ -180,14 +212,22 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 			}
 		}else{
 			// for 'branch' fields, append non-null values in 'usual' to 'branches'
-			var structs = [keySuffixes, uidPrefixes, xidPrefixes];
-			var delimiters = [separator_key, separator_detail, separator_detail];
+			var structs = [keyFieldSuffixes, uidPrefixes, xidPrefixes];
+			var delimiters = [null, separator_detail, separator_detail];
 			for(s=0; s < structs.length; s++){
 				var str = structs[s];
 				var del = delimiters[s];
 				if(str[usual][0] != null){
-					addend = (str[type][fieldIndex] != null ? del + str[type][fieldIndex] : '');
-					str[type][fieldIndex] = str[usual][0] + addend;
+					if(del == null){
+						if(str[type][fieldIndex] == null){
+							str[type][fieldIndex] = [];
+						}
+						// unshift => the cumulative data preceed that of the current field-branch
+						[].unshift.apply(str[type][fieldIndex], str[usual][0]);
+					}else{
+						addend = (str[type][fieldIndex] != null ? del + str[type][fieldIndex] : '');
+						str[type][fieldIndex] = str[usual][0] + addend;
+					}
 				}
 			}
 			if(xid[usual] != null){
@@ -212,7 +252,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		var kb = keyBranches[i];
 		var idx = datatype.getConfigFieldIdx(keyConfig, kb) || 0;	// i.e. branchIndex or compoundIndex
 		var sa = {};
-		sa.keySuffixes = keySuffixes[type][idx];
+		sa.keyfieldsuffixes = keyFieldSuffixes[type][idx] || [];
 		sa.luaArgs = luaArgs[type][idx];
 		sa.uid = uidPrefixes[type][idx];
 		if(struct == 'zset'){
@@ -257,7 +297,6 @@ getFieldBranchFUID = function getFieldBranchFUID(fieldIndex, keyLabel, mySuffixC
 query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributesToIndex(cmd, key, key_text, xid, uid, field_branch){
 	// NB: if <xid> is null, <uid> still has to be parsed
 	var index = {};
-	var fld = null;
 	var fuid = null;
 	var keyConfig = datatype.getKeyConfig(key);
 	var keyLabel = datatype.getKeyLabel(key);
@@ -418,7 +457,7 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 };
 
 
-// ranges are inclusive
+// without special operator, ranges are inclusive
 getKeyRangeMaxByProp = function getQueryKeyRangeMaxByProp(key, index, score, prop){
 	var maxScore = null;
 	var max = (index || {}).max;
@@ -576,8 +615,9 @@ getKeyRangeStopMember = function getQueryKeyRangeStopMember(range_order, key, ra
 };
 
 
-query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, rangeConfig, attribute, field, storage_attribute){
+query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attribute, field, storage_attribute){
 	var key = keys[0];
+	var cmd = meta_cmd;
 	var keyConfig = datatype.getKeyConfig(key);
 	var keyLabel = datatype.getKeyLabel(key);
 	var struct = datatype.getConfigStructId(keyConfig);
@@ -585,213 +625,210 @@ query_redis.getCIQA = function getCIQA(cluster_instance, cmd, keys, index, range
 	var xid = storage_attribute.xid;
 	var uid = storage_attribute.uid;
 	var luaArgs = storage_attribute.luaArgs || [];
-	var keySuffixes = storage_attribute.keySuffixes;
+	var keySuffixes = storage_attribute.keyfieldsuffixes.map(function(kfs){return kfs.keysuffix;});
 	var args = [];
 	var limit = (attribute || {}).limit;
-	switch(cluster.getInstanceType(cluster_instance)){
-	default:
-		switch(struct){
-		case 'string':
-			if(utils.startsWith(command.getType(cmd), 'upsert')){
-				lua = 'local xid = redis.call("get", KEYS[1]);'
-					+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
-					+ 'local xidStr = "";'
-					+ 'for i=1, #xidList, 1 do'
-					+ '    if i > 1 then'
-					+ '        xidStr = xidStr.."'+separator_detail+'"'
-					+ '    end;'
-					+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
-					+ '        xidStr = xidStr..ARGV[i];'
-					+ '    else'
-					+ '        xidStr = xidStr..xidList[i];'
-					+ '    end;'
-					+ 'end;'
-					+ 'if xid ~= xidStr then'
-					+ '    return redis.call("set", KEYS[1], xidStr);'
-					+ 'else'
-					+ '    return 0;'
-					+ 'end;';
+	switch(struct){
+	case 'string':
+		if(utils.startsWith(command.getType(cmd), 'upsert')){
+			lua = 'local xid = redis.call("get", KEYS[1]);'
+				+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
+				+ 'local xidStr = "";'
+				+ 'for i=1, #xidList, 1 do'
+				+ '    if i > 1 then'
+				+ '        xidStr = xidStr.."'+separator_detail+'"'
+				+ '    end;'
+				+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
+				+ '        xidStr = xidStr..ARGV[i];'
+				+ '    else'
+				+ '        xidStr = xidStr..xidList[i];'
+				+ '    end;'
+				+ 'end;'
+				+ 'if xid ~= xidStr then'
+				+ '    return redis.call("set", KEYS[1], xidStr);'
+				+ 'else'
+				+ '    return 0;'
+				+ 'end;';
+		}else{
+			if(command.requiresXID(cmd)){
+				args.unshift(xid || '');
+			}
+			if(command.requiresUID(cmd)){
+				args.unshift(uid || '');
+			}
+		}
+		break;
+	case 'set':
+	case 'hash':
+		if(utils.startsWith(command.getType(cmd), 'upsert')){
+			lua = 'local xid = redis.call("hget", KEYS[1], ARGV[1]);'
+				+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
+				+ 'local xidStr = "";'
+				+ 'for i=2, #xidList, 1 do'				// ARGV[1] holds UID
+				+ '    if i > 1 then'
+				+ '        xidStr = xidStr.."'+separator_detail+'"'
+				+ '    end;'
+				+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
+				+ '        xidStr = xidStr..ARGV[i];'
+				+ '    else'
+				+ '        xidStr = xidStr..xidList[i];'
+				+ '    end;'
+				+ 'end;'
+				+ 'if xid ~= xidStr then'
+				+ '    return redis.call("hset", KEYS[1], ARGV[1], xidStr);'
+				+ 'else'
+				+ '    return 0;'
+				+ 'end;';
+			luaArgs.unshift(uid);
+		}else{
+			if(command.requiresXID(cmd)){
+				args.unshift(xid || '');
+			}
+			if(command.requiresUID(cmd)){
+				args.unshift(uid || '');
+			}
+		}
+		break;
+	case 'zset':
+		var rangeOrder = command.getOrder(cmd) || asc;
+		// decide between the different type of ranges
+		if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
+			cmd = command.getMode(cmd)[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
+		}
+		if(utils.startsWith(command.getType(cmd), 'upsert')){
+			lua = ' local score = redis.call("zscore", KEYS[1], ARGV[1]);'
+				+ 'if score == nil then'
+				+ '    score = 0;'
+				+ 'end;'
+				+ 'local scoreStr = score;'
+				+ 'for i=2, #ARGV, 3 do'			// ARGV[1] is the member i.e. args[0]
+				+ '     local lhs = scoreStr - (scoreStr % ARGV[i+2]);'
+				+ '     local mid = ARGV[i] * ARGV[i+1];'
+				+ '     local rhs = scoreStr % ARGV[i+1];'
+				+ '     scoreStr = lhs + mid + rhs;'
+				+ 'end;'
+				+ 'if score ~= scoreStr then'
+				+ '    return redis.call("zadd", KEYS[1], scoreStr, ARGV[1]);'
+				+ 'else'
+				+ '    return 0;'
+				+ 'end;';
+			luaArgs.unshift(uid);
+		}else if(utils.startsWith(command.getType(cmd), 'rankbyscorelex')){
+			// NB: a partial-score may be present so score==null is false
+			// .bylex requires args so when missing => zcard
+			// .byscore should also have args together with the score
+			if(/*score == null &&*/ uid == null){
+				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
 			}else{
-				if(command.requiresXID(cmd)){
-					args.unshift(xid || '');
-				}
-				if(command.requiresUID(cmd)){
-					args.unshift(uid || '');
-				}
-			}
-			break;
-		case 'set':
-		case 'hash':
-			if(utils.startsWith(command.getType(cmd), 'upsert')){
-				lua = 'local xid = redis.call("hget", KEYS[1], ARGV[1]);'
-					+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
-					+ 'local xidStr = "";'
-					+ 'for i=2, #xidList, 1 do'				// ARGV[1] holds UID
-					+ '    if i > 1 then'
-					+ '        xidStr = xidStr.."'+separator_detail+'"'
-					+ '    end;'
-					+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
-					+ '        xidStr = xidStr..ARGV[i];'
-					+ '    else'
-					+ '        xidStr = xidStr..xidList[i];'
-					+ '    end;'
-					+ 'end;'
-					+ 'if xid ~= xidStr then'
-					+ '    return redis.call("hset", KEYS[1], ARGV[1], xidStr);'
-					+ 'else'
-					+ '    return 0;'
-					+ 'end;';
-				luaArgs.unshift(uid);
-			}else{
-				if(command.requiresXID(cmd)){
-					args.unshift(xid || '');
-				}
-				if(command.requiresUID(cmd)){
-					args.unshift(uid || '');
-				}
-			}
-			break;
-		case 'zset':
-			var rangeOrder = command.getOrder(cmd) || asc;
-			// decide between the different type of ranges
-			if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
-				cmd = command.getMode(cmd)[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
-			}
-			if(utils.startsWith(command.getType(cmd), 'upsert')){
-				lua = ' local score = redis.call("zscore", KEYS[1], ARGV[1]);'
-					+ 'if score == nil then'
-					+ '    score = 0;'
-					+ 'end;'
-					+ 'local scoreStr = score;'
-					+ 'for i=2, #ARGV, 3 do'			// ARGV[1] is the member i.e. args[0]
-					+ '     local lhs = scoreStr - (scoreStr % ARGV[i+2]);'
-					+ '     local mid = ARGV[i] * ARGV[i+1];'
-					+ '     local rhs = scoreStr % ARGV[i+1];'
-					+ '     scoreStr = lhs + mid + rhs;'
-					+ 'end;'
-					+ 'if score ~= scoreStr then'
-					+ '    return redis.call("zadd", KEYS[1], scoreStr, ARGV[1]);'
-					+ 'else'
-					+ '    return 0;'
-					+ 'end;';
-				luaArgs.unshift(uid);
-			}else if(utils.startsWith(command.getType(cmd), 'rankbyscorelex')){
-				// NB: a partial-score may be present so score==null is false
-				// .bylex requires args so when missing => zcard
-				// .byscore should also have args together with the score
-				if(/*score == null &&*/ uid == null){
-					cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
-				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
-					if(startScore == Infinity || startScore == -Infinity){
-						startScore = null;
-					}
-					var scorerank = {}; scorerank[asc] = '"zrevrank"'; scorerank[desc] = '"zrevrank"';
-					lua = ' local startScore = ARGV[1];'
-						+ 'local member = ARGV[2];'
-						+ 'local score = nil;'
-						+ 'local rank = nil;'
-						+ 'if startScore ~= "'+label_lua_nil+'" then'				// verify unchanged score-member
-						+ '    score = redis.call("zscore", KEYS[1], member);'			// check score tally first
-						+ '    if score == startScore then'					// then rank can be set
-						+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-						+ '    else'
-						+ '        member = member.."'+collision_breaker+'";'
-						+ '        score = startScore;'
-						+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-						+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-						+ '        if count > 0 then'
-						+ '            redis.call("zrem", KEYS[1], member);'
-						+ '        end;'
-						+ '    end;'
-						+ 'else'
-						+ '    rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'	//no score to seek with
-						+ 'end;'
-						+ 'return rank;'
-					luaArgs.unshift(uid);
-					luaArgs.unshift(startScore || label_lua_nil);
-				}
-			}else if(utils.startsWith(command.getType(cmd), 'rangebyscorelex')){
-				// FYI: zrank and zrevrank are symmetric so a single code works!
-				// NB: redis excluding/bound operator is not required/allowed here
-				// so [member] argument can be tweaked for the desired result
-				// NB: if startScore must be used, range [prop] must be provided
 				var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
 				if(startScore == Infinity || startScore == -Infinity){
 					startScore = null;
 				}
-				//var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
-				// TODO add countbyscorelex; //TODO implement stopScore
-				var zrank = {}; zrank[asc] = '"zrank"'; zrank[desc] ='"zrevrank"';
-				var zrange = {}; zrange[asc] = '"zrange"'; zrange[desc] ='"zrevrange"';
-				var zlimit = {}; zlimit[asc] = '-1'; zlimit[desc] = '0';
-				lua = ' local rank = nil;'
-					+ 'local startScore = ARGV[1];'
+				var scorerank = {}; scorerank[asc] = '"zrevrank"'; scorerank[desc] = '"zrevrank"';
+				lua = ' local startScore = ARGV[1];'
 					+ 'local member = ARGV[2];'
 					+ 'local score = nil;'
-					+ 'if startScore ~= "'+label_lua_nil+'" then'						// verify unchanged score-member
-					+ '    score = redis.call("zscore", KEYS[1], member);'					// check score tally first
-					+ '    if score == startScore then'							// then rank can be set
-					+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
-					+ '        rank = rank + '+(startScore && startScore[0] == '(' ? 1 : 0)+';'
+					+ 'local rank = nil;'
+					+ 'if startScore ~= "'+label_lua_nil+'" then'				// verify unchanged score-member
+					+ '    score = redis.call("zscore", KEYS[1], member);'			// check score tally first
+					+ '    if score == startScore then'					// then rank can be set
+					+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
 					+ '    else'
 					+ '        member = member.."'+collision_breaker+'";'
 					+ '        score = startScore;'
 					+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-					+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'	// infer the previous position
+					+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
 					+ '        if count > 0 then'
-					+ '             redis.call("zrem", KEYS[1], member);'
+					+ '            redis.call("zrem", KEYS[1], member);'
 					+ '        end;'
 					+ '    end;'
 					+ 'else'
-					+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
+					+ '    rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'	//no score to seek with
 					+ 'end;'
-					+ 'if rank ~= nil then'
-					+ '    return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
-						+ (limit != null ? 'rank+'+limit+'-1' : zlimit[command.getOrder(cmd)])
-						+ (attribute.withscores ? ', "withscores");' : ');')
-					+ 'else'
-					+ '    return {};'
-					+ 'end;'
+					+ 'return rank;'
 				luaArgs.unshift(uid);
-				// TODO rewrite lua scripts not to used normal ranging functions
-				// 	for now hack around example.js issue
-				if(startScore && startScore[0] == '('){
-					startScore = parseInt(startScore.slice(1));
-				}
 				luaArgs.unshift(startScore || label_lua_nil);
-			}else if(utils.startsWith(command.getType(cmd), 'countbylex') || utils.startsWith(command.getType(cmd), 'rangebylex')
-					|| utils.startsWith(command.getType(cmd), 'delrangebylex')){
-				if(utils.startsWith(command.getType(cmd), 'countbylex') && uid == null){
-					cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
-				}else{
-					var startMember = getKeyRangeStartMember(rangeOrder, key, rangeConfig, uid);
-					var stopMember = getKeyRangeStopMember(rangeOrder, key, rangeConfig, uid);
-					args.unshift(stopMember);
-					args.unshift(startMember);
-				}
-			}else if(utils.startsWith(command.getType(cmd), 'countbyscore') || utils.startsWith(command.getType(cmd), 'rangebyscore')
-					|| utils.startsWith(command.getType(cmd), 'delrangebyscore')){
-				if(utils.startsWith(command.getType(cmd), 'countbyscore') && (xid == null || xid == '')){
-					cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
-				}else{
-					var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
-					var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
-					args.unshift(stopScore);
-					args.unshift(startScore);
-				}
-			}else{
-				if(command.requiresUID(cmd)){
-					args.unshift(uid || '');
-				}
-				if(command.requiresXID(cmd)){
-					args.unshift(xid || 0);		// || 0 ... typically for zset.lex
-				}
 			}
-			break;
-		default:
-			throw new Error('FATAL: query.query: unknown keytype!!');
+		}else if(utils.startsWith(command.getType(cmd), 'rangebyscorelex')){
+			// FYI: zrank and zrevrank are symmetric so a single code works!
+			// NB: redis excluding/bound operator is not required/allowed here
+			// so [member] argument can be tweaked for the desired result
+			// NB: if startScore must be used, range [prop] must be provided
+			var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
+			if(startScore == Infinity || startScore == -Infinity){
+				startScore = null;
+			}
+			// TODO rewrite lua scripts not to use normal ranging functions i.e. getKeyRangeStartScore
+			// 	for now hack around example.js issue
+			if(startScore && startScore[0] == '('){
+				startScore = parseInt(startScore.slice(1));
+			}
+			//var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
+			// TODO add countbyscorelex; //TODO implement stopScore
+			var zrank = {}; zrank[asc] = '"zrank"'; zrank[desc] ='"zrevrank"';
+			var zrange = {}; zrange[asc] = '"zrange"'; zrange[desc] ='"zrevrange"';
+			var zlimit = {}; zlimit[asc] = '-1'; zlimit[desc] = '0';
+			lua = ' local rank = nil;'
+				+ 'local startScore = ARGV[1];'
+				+ 'local member = ARGV[2];'
+				+ 'local score = nil;'
+				+ 'if startScore ~= "'+label_lua_nil+'" then'						// verify unchanged score-member
+				+ '    score = redis.call("zscore", KEYS[1], member);'					// check score tally first
+				+ '    if score == startScore then'							// then rank can be set
+				+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
+				+ '        rank = rank + '+(startScore && startScore[0] == '(' ? 1 : 0)+';'
+				+ '    else'
+				+ '        member = member.."'+collision_breaker+'";'
+				+ '        score = startScore;'
+				+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
+				+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'	// infer the previous position
+				+ '        if count > 0 then'
+				+ '             redis.call("zrem", KEYS[1], member);'
+				+ '        end;'
+				+ '    end;'
+				+ 'else'
+				+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
+				+ 'end;'
+				+ 'if rank ~= nil then'
+				+ '    return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
+					+ (limit != null ? 'rank+'+limit+'-1' : zlimit[command.getOrder(cmd)])
+					+ (attribute.withscores ? ', "withscores");' : ');')
+				+ 'else'
+				+ '    return {};'
+				+ 'end;'
+			luaArgs.unshift(uid || label_lua_nil);
+			luaArgs.unshift(startScore || label_lua_nil);
+		}else if(utils.startsWith(command.getType(cmd), 'countbylex') || utils.startsWith(command.getType(cmd), 'rangebylex')
+				|| utils.startsWith(command.getType(cmd), 'delrangebylex')){
+			if(utils.startsWith(command.getType(cmd), 'countbylex') && uid == null){
+				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
+			}else{
+				var startMember = getKeyRangeStartMember(rangeOrder, key, rangeConfig, uid);
+				var stopMember = getKeyRangeStopMember(rangeOrder, key, rangeConfig, uid);
+				args.unshift(stopMember);
+				args.unshift(startMember);
+			}
+		}else if(utils.startsWith(command.getType(cmd), 'countbyscore') || utils.startsWith(command.getType(cmd), 'rangebyscore')
+				|| utils.startsWith(command.getType(cmd), 'delrangebyscore')){
+			if(utils.startsWith(command.getType(cmd), 'countbyscore') && (xid == null || xid == '')){
+				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
+			}else{
+				var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
+				var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
+				args.unshift(stopScore);
+				args.unshift(startScore);
+			}
+		}else{
+			if(command.requiresUID(cmd)){
+				args.unshift(uid || '');
+			}
+			if(command.requiresXID(cmd)){
+				args.unshift(xid || 0);		// || 0 ... typically for zset.lex
+			}
 		}
+		break;
+	default:
+		throw new Error('FATAL: query.query: unknown keytype!!');
 	}
 	var keyText = keyLabel+(field != null ? separator_key+field : '')+(keySuffixes != null ? separator_key+keySuffixes : '');
 	if((luaArgs || []).length > 0 && (utils.startsWith(command.getType(cmd), 'upsert')
