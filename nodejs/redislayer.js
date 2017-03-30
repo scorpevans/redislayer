@@ -7,7 +7,7 @@ var query = require('./query');
 var comparison = require('./comparison');
 var join = require('./join');
 var migrate = require('./migrate');
-
+var command = datatype.command;
 
 
 redislayer = {
@@ -26,13 +26,19 @@ Redislayer returns cluster objects with fields corresponding to the Roles the cl
 	
 	/*
 	 * @param	{string}	the label of the cluster to be designated as the default-cluster
+	 * @return	{object}	the default cluster
 	 */
-	setDefaultClusterLabel: cluster.setDefaultLabel,
+	setDefaultClusterByLabel: cluster.setDefaultByLabel,
 
 	/*
 	 * @return	{string}	the label of the cluster designated as the default-cluster
 	 */
 	getDefaultClusterLabel: cluster.getDefaultLabel,
+
+	/*
+	 * @return	{number}	the ID of the cluster designated as the default-cluster
+	 */
+	getDefaultClusterId: cluster.getDefaultId,
 
 	/**
 	 * @return	{object}	the default-cluster along with the Roles with which it was configured
@@ -79,10 +85,6 @@ Key objects also have a command-set depending on the Struct under which they are
 	 * @param	{string}	the string used to separate key-parts e.g. ':' as in user:name:first
 	 */
 	setKeySeparator: datatype.setKeySeparator,
-	/**
-	 * @param	{string}	the string used to separate data parts e.g. '|' as in john|doe|3
-	 */
-	setDetailSeparator: datatype.setDetailSeparator,
 	/** redislayer may need to make it's own probing insertions/deletions; it must be ensured data is not overwritten
 	 * @param	{string}	a messy string which is guaranteed not to be found in any stored data
 	 */
@@ -93,18 +95,28 @@ Key objects also have a command-set depending on the Struct under which they are
 	 */
 	getKeySeparator: datatype.getKeySeparator,
 	/**
-	 * @return	{string}	see getDetailSeparator
-	 */
-	getDetailSeparator: datatype.getDetailSeparator,
-	/**
 	 * @return	{string}	see setCollisionBreaker
 	 */
 	getCollisionBreaker: datatype.getCollisionBreaker,
+	/**
+	 * @return	{string}	see getDetailSeparator
+	 */
+	getDetailSeparator: datatype.getDetailSeparator,
 
 	/**
 	 * @return	{number}	the maximum 
 	 */
 	getRedisMaxScoreFactor: datatype.getRedisMaxScoreFactor,
+
+	/**
+	 * @return	{string}	the string constant used to represent ascending-order
+	 */
+	getAscendingOrderLabel: command.getAscendingOrderLabel,
+
+	/**
+	 * @return	{string}	the string constant used to represent descending-order
+	 */
+	getDescendingOrderLabel: command.getDescendingOrderLabel,
 
 	/**
 	 * recommended approach to creating configs, keys and getters
@@ -115,56 +127,14 @@ Key objects also have a command-set depending on the Struct under which they are
 		datatype.loadTree(arg.dtree);
 	},
 
-	// the following section is API offer getters and setters to dtree
-	// they are best understood by first taking a look at dtree.js
-	
-	/**
-	 * @return	{object}	get the different types of data structures available
-	 */
-	getStruct: datatype.getStruct,
-	
-	/*
-	 * @return	{object}	available configs
-	 */
-	getConfig: datatype.getConfig,
-	
-	/*
-	 * @return	{object}	available keys
-	 */
-	getKey: datatype.getKey,
-
-	/*
-	 * @return	{function}	see defaultgetter dict in dtree.js
-	 */
-	getDefaultClusterInstanceGetter: datatype.getClusterInstanceGetter,
-
-	/*
-	 * @return	{function}	see defaultgetter dict in dtree.js
-	 */
-	getDefaultFieldMinValueGetter: datatype.getFieldMinValueGetter,
-
-	/*
-	 * @return	{function}	see defaultgetter dict in dtree.js
-	 */
-	getDefaultFieldMaxValueGetter: datatype.getFieldMaxValueGetter,
-
-	/*
-	 * @return	{function}	see defaultgetter dict in dtree.js
-	 */
-	getDefaultFieldPreviousKeySuffixGetter: datatype.getFieldPreviousChainGetter,
-
-	/*
-	 * @return	{function}	see defaultgetter dict in dtree.js
-	 */
-	getDefaultFieldKeySuffixChainGetter: datatype.getFieldNextChainGetter,
-	
 	/**
 	 * @param	{object}	arg - a dict
-	 * @param	{string}	arg.id - unique identifier
+	 * @param	{string}	arg.id - unique identifier across all Configs
 	 * @param	{function}	arg.struct - struct; select one from getStruct()
 	 * @param	{object}	arg.indexconfig - index_config; see dtree.js for sample
 	 * @param	{boolean}	arg.ontree - specify if the config should be loaded into Redislayer
 	 * @return 	{function}	newly created config
+	 * @throws	an error describing a malformed config
 	 */
 	createConfig: function createConfig(arg){
 		return datatype.createConfig(arg.id, arg.struct, arg.indexconfig, arg.ontree);
@@ -172,7 +142,7 @@ Key objects also have a command-set depending on the Struct under which they are
 	
 	/**
 	 * @param 	{object}	arg - a dict
-	 * @param 	{string}	arg.id - unique identifier
+	 * @param 	{string}	arg.id - unique identifier across all Keys
 	 * @param 	{string}	arg.label - a label which would be used as the table/key name
 	 * @param 	{function}	arg.config - select one from getConfig() or createConfig()
 	 * @param	{boolean}	arg.ontree - specify if the key should be loaded into Redislayer
@@ -182,30 +152,53 @@ Key objects also have a command-set depending on the Struct under which they are
 		return datatype.createKey(arg.id, arg.label, arg.config, arg.ontree)
 	},
 
-	/*
+	// the following section is API offer getters and setters to dtree
+	// they are best understood by first taking a look at dtree.js
+	
+	/**
+	 * @return	{object}	get the different types of data structures available
+	 */
+	getStruct: datatype.getStruct,
+	
+	/**
+	 * @return	{object}	available configs
+	 */
+	getConfig: datatype.getConfig,
+	
+	/**
+	 * @return	{object}	available keys
+	 */
+	getKey: datatype.getKey,
+
+	/**
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultClusterInstanceGetter: function(){return datatype.getClusterInstanceGetter();},
+
+	/**
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldNextKeySuffixGetter: function(){return datatype.getFieldNextChainGetter();},
+
+	/**
 	 * @param	{function}	see getDefaultClusterInstanceGetter
 	 */
-	setDefaultClusterInstanceGetter: datatype.setClusterInstanceGetter,
+	setDefaultClusterInstanceGetter: function(func){datatype.setClusterInstanceGetter(func);},
 
-	/*
-	 * @param	{function}	see getDefaultFieldMinValueGetter
+	/**
+	 * @param	{function}	see getDefaultFieldNextKeySuffixGetter
 	 */
-	setDefaultFieldMinValueGetter: datatype.setFieldMinValueGetter,
+	setDefaultFieldNextKeySuffixGetter: function(func){datatype.setFieldNextChainGetter(func);},
 
-	/*
-	 * @param	{function}	see getDefaultFieldMaxValueGetter
+	/** 
+	 * get a keysuffixindex from an index; see dtree.js
+	 * keysuffixindex shows the values which would be used to suffix the main key-label
+	 * @param	{function}	key
+	 * @param	{string}	field-branch to consider or NULL if index is configured with no field-branches
+	 * @param	{object}	index
+	 * @return	{object}	keysuffixindex
 	 */
-	setDefaultFieldMaxValueGetter: datatype.setFieldMaxValueGetter,
-
-	/*
-	 * @param	{function}	see getDefaultFieldPreviousKeySuffixGetter
-	 */
-	setDefaultFieldPreviousKeySuffixGetter: datatype.setFieldPreviousChainGetter,
-
-	/*
-	 * @param	{function}	see getDefaultFieldKeySuffixChainGetter
-	 */
-	setDefaultFieldKeySuffixChainGetter: datatype.setFieldNextChainGetter,
+	getKeyFieldSuffixIndex: datatype.getKeyFieldSuffixIndex,
 	
 
 /* QUERY
@@ -223,13 +216,15 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * A query Range or rangeConfig is an object with the following fields:
 	 * 	- index:	an Index on which the Range is based
 	 * 	- startProp:	the field in the Index from where ranging is to begin; fields in the index with lower
-	 * 			ordering are ignored; e.g. $f1:$startProp:$f3 would begin ranging from $f1:$startProp:
-	 * 			NULL value indicates that the entire index values should be used
+	 * 			ordering are ignored; e.g. $f1:$startProp:$f3 would begin ranging from $f1:$startProp:, unless there's a startValue
+	 * 			NULL value indicates that the entire index values should be used, unless there's a startValue
 	 * 	- stopProp:	the field in the index whose value should terminate ranging
-	 * 			e.g. $f1:$stopProp:$f3 terminates at $f1:($stopProp+1) exclusively
-	 * 			NULL value indicates that the entire index values should be used
-	 * 	- boundValue:	the value of stopProp, in case it's not a mere increment/decrement
-	 * 			e.g. $f1:$stopProp:$f3 terminates at $f1:boundValue exclusively
+	 * 			e.g. $f1:$stopProp:$f3 terminates at $f1:($stopProp+1): exclusively, unless there's a stopValue
+	 * 			NULL value indicates that ranging terminates as soon as the scope of the startProp changes
+	 * 	- startValue:	the value of startProp; if startProp is NULL, it is simply the start value of the range command e.g. for zrange
+	 * 			e.g. $f1:$startProp:$f3 begins ranging at $f1:startValue: inclusively
+	 * 	- stopValue:	the end value of stopProp; if stopProp is NULL, it is simply the stop value of the range command e.g. for zrange
+	 * 			e.g. $f1:$stopProp:$f3 terminates at $f1:stopValue: inclusively
 	 * 	- excludeCursor:	a boolean to indicate whether the start point of the Range should be included in resultset
 	 * 	- cursorMatchOffset:	redislayer sets this in case of joins, to specify amount of already returned
 	 * 				values which match the cursor position; it should be returned for re-fetches
@@ -301,7 +296,8 @@ In case a resultset doesn't have the [keys] property, a so-called [ord] property
 	 */
 	jointMap: comparison.fieldMask,
 
-	/* The joint object determines the range of fields to be used in checking the relative storage/retrieval ordering between objects.
+	/**
+	 * The joint object determines the range of fields to be used in checking the relative storage/retrieval ordering between objects.
 	 * WARNING: The @from param allows to ignore higher-order fields which the caller assures to be ordered
 	 *	This reduces administration of joinmaps (especially when out-of-focus higher-order fields are added later).
 	 *	However when the ordering of such ignored fields is broken, cursoring may go wrong, hence infinite loops may result
@@ -382,7 +378,7 @@ Migrating is simply the call to a function.
 	},
 
 // CALLBACK
-	/*
+	/**
 	 * @callback	resultsetCallback
 	 * @param	{object}	result - a dict
 	 * @param	{number}	result.code - 0 for success, else it depends

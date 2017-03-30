@@ -7,7 +7,7 @@ var command = datatype.command;
 var queryRedis = require('./query_redis');
 
 var query = {
-	const_limit_default: 50,				// result limit for performing internal routines
+	const_limit_default: 100,	// result limit for performing internal routines
 };
 
 
@@ -18,7 +18,7 @@ var redisMaxScoreFactor = datatype.getRedisMaxScoreFactor();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
 
-var label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possible
+var label_lua_nil = '_nil';		// passing raw <nil> to lua is not exactly possible
 
 
 query.getDefaultBatchLimit = function getQueryDefaultBatchLimit(){
@@ -29,8 +29,9 @@ query.getDefaultBatchLimit = function getQueryDefaultBatchLimit(){
 query.rangeConfig = function queryRangeConfig(index){
 	this.index = index;		// an index representing an object
 	this.startProp = null;		// the prop which should be used to compute the starting point based on the Index
-	this.stopProp = null;		// the prop which should be used to compute the stopping point
-	this.boundValue = null;		// inclusive max/min value for stopProp; if NULL, ranging stops when value change from Index's stopProp value
+	this.stopProp = null;		// the prop which should be used to compute the stopping point, ranging stops when value changes
+	this.startValue = null;		// inclusive min/max value of startProp or command if startProp is NULL
+	this.stopValue = null;		// inclusive min/max value of stopProp or command if stopProp is NULL
 	this.excludeCursor = false;	// in case of paging, used to specify if cursor position should be skipped
 	this.cursorMatchOffset = null;	// in case of joins, used to specify amount of already returned values which match the cursor position 
 	var that = this;
@@ -38,7 +39,8 @@ query.rangeConfig = function queryRangeConfig(index){
 		var rc = new query.rangeConfig(that.index);
 		rc.startProp = that.startProp;
 		rc.stopProp = that.stopProp;
-		rc.boundValue = that.boundValue;
+		rc.startValue = that.startValue;
+		rc.stopValue = that.stopValue;
 		rc.excludeCursor = that.excludeCursor;
 		rc.cursorMatchOffset = that.cursorMatchOffset;
 		return rc;
@@ -54,209 +56,357 @@ query.cloneRangeConfig = function cloneQueryRangeConfig(rc){
 
 
 // decide here which cluster_instance should be queried
-getQueryDBInstance = function getQueryDBInstance(meta_cmd, keys, index, key_field){
-	var key = keys[0];
-	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
-	var keyFieldSuffixIndex = datatype.getKeyFieldSuffixIndex(key, key_field, index);
-	var arg = {metacmd:meta_cmd, key:keys, keysuffixindex:keyFieldSuffixIndex, keyfield:key_field};
-	return instanceDecisionFunction.apply(this, [arg]);
+getQueryDBInstance = function getQueryDBInstance(instance_decision_function, meta_cmd, keys, key_field_suffix_index, key_field){
+	var arg = {metacmd:meta_cmd, key:keys, keysuffixindex:key_field_suffix_index, keyfield:key_field};
+	return instance_decision_function.apply(this, [arg]);
+};
+
+getClusterInstanceQueryArgs = function getClusterInstanceQueryArgs(cluster_instance_type, meta_cmd, keys, rangeConfig, attribute, field, storage_attr){
+	switch(cluster_instance_type){
+	default:
+		return queryRedis.getCIQA(meta_cmd, keys, rangeConfig, attribute, field, storage_attr);
+	}
+};
+
+parseClusterInstanceIndexToStorageAttributes = function parseClusterInstanceIndexToStorageAttributes(cluster_instance_type, key, meta_cmd, index, range_config){
+	switch(cluster_instance_type){
+	default:
+		return queryRedis.parseIndexToStorageAttributes(key, meta_cmd, index, range_config);
+	}
 };
 
 // get next set of keyChains after the index's key
-// In the case of keySuffixes, command.isOverRange must be run across a set of keyChains
-// NB: depending on attribute.limit, execution may be touch only some preceding keys (even for $count command)
+// In the case of keyFieldSuffixes, command.isOverRange must be run across a set of keyChains
+// NB: depending on attribute.limit, execution may touch only some keyChains (even for $count command)
 // hence attribute.limit is very much recommended
-getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_suffixes, limit){
-	if(!((key_suffixes || []).length > 0)){
+// NB: the order of key_field_suffixes is crucial
+//	it should reflect the same case as if only a single key was used
+//	hence Score fields should precede Member fields
+getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_field_suffixes, limit, then){
+	if(!((key_field_suffixes || []).length > 0)){
 		return [];
 	}
-	var key = keys[0];
-	var config = datatype.getKeyConfig(key);
-	// fetch indexes of key-suffix props
-	var props = datatype.getConfigIndexProp(key_type, 'fields');
-	var suffixPropIndexes = [];
-	for(var i=0; i < props.length; i++){
-		if(datatype.isConfigFieldKeySuffix(key_type, i)){
-			if(!datatype.isConfigFieldBranch(key_type, i)){
-				suffixPropIndexes.push(i);
-			}else if(props[i] == key_field){		// if keyText is the field-branch
-				suffixPropIndexes.unshift(i);
-			}
-		}
+	if(limit == null || limit > query.const_limit_default){
+		limit = query.const_limit_default;
 	}
+	var key = keys[0];
+	var fields = datatype.getConfigIndexProp(key_type, 'fields');
+	var config = datatype.getKeyConfig(key);
 	var cmdOrder = command.getOrder(cmd); 
 	var keyChain = [];
-	for(var suffixPropIdx=0; suffixPropIdx < suffixPropIndexes.length && keyChain.length < limit; suffixPropIdx++){
-		var propIdx = suffixPropIndexes[suffixPropIdx];
-		var prop = props[propIdx];
-		var propBoundChain = datatype.getKeyFieldBoundChain(key, prop, cmdOrder);
-		do{
-			var previousKeySuffixes = keyChain[keyChain.length-1] || key_suffixes;
-			var propCurrentChain = previousKeySuffixes[suffixPropIdx];
-			var propNextChain = datatype.getKeyFieldNextChain(key, prop, cmdOrder, propCurrentChain);
-			var isChainWithinBound = datatype.isKeyFieldChainWithinBound(config, propIdx, cmdOrder, propNextChain, propBoundChain);
-			if(isChainWithinBound){
-				var nextKeySuffixes = previousKeySuffixes.concat([]);
-				nextKeySuffixes[suffixPropIdx] = propNextChain;
-				keyChain.push(nextKeySuffixes);
+	var arg = {key:key, limit:limit, order:cmdOrder};
+	var keyChainGetters = [];
+	var idx = key_field_suffixes.length-1;
+	var resetIdxCounter = [];
+	key_field_suffixes = key_field_suffixes.map(function(ks){return utils.shallowCopy(ks);});	// remove potential references, prepare for mutation
+	async.whilst(
+	function(){
+		return (idx >= 0 && keyChain.length < limit);
+	},function(callback){
+			var kfs = key_field_suffixes[idx];
+			var fieldIdx = kfs.fieldidx;
+			var field = fields[fieldIdx];
+			arg.field = field;
+			arg.keysuffix = (resetIdxCounter[idx] ? null : kfs.keysuffix);
+			var keyChainGetter = keyChainGetters[idx];
+			if(!keyChainGetter){
+				keyChainGetters[idx] = datatype.getKeyFieldNextChainGetter(key, field);
+				keyChainGetter = keyChainGetters[idx];
 			}
-		}while(isChainWithinBound && keyChain.length < limit);
-	}
-	return keyChain;	
-};
-
-// TODO: limit-offset across keyChains is not yet supported
-queryDBInstance = function queryDBInstance(cluster_instance, cmd, keys, key_type, key_field, key_suffixes, index, args, attribute, then){
-	var ret = {code:1};
-	var key = keys[0];
-	var keyLabels = [datatype.getKeyLabel(key)];
-	var chainedKeySuffixes = [key_suffixes || []];
-	var chainedArgs = [args];
-	var keyFieldArray = (key_field != null ? [key_field] : []);
-	attribute = attribute || {};
-	var limit = attribute.limit;
-	var offset = attribute.offset;
-	var nx = attribute.nx;
-	var withscores = attribute.withscores;
-	var cmdType = command.getType(cmd);
-	var keyCommand = command.toRedis(cmd);
-	var suffixes = [];
-	var prefixes = [];
-	var clusterInstance = cluster_instance;
-	// preprocess attributes for different types of storages
-	switch(cluster.getInstanceType(clusterInstance)){
-	default:
-		if(limit && !utils.startsWith(command.getType(cmd), 'count')){
-			[].push.apply(suffixes, ['LIMIT', offset || 0, limit]);
-		}
-		if(withscores && !utils.startsWith(cmdType, 'rangebylex') && !utils.startsWith(cmdType, 'count')){
-			suffixes.unshift('WITHSCORES');
-		}
-		if(nx && utils.startsWith(cmdType, 'add')){
-			prefixes.unshift('NX');
-		}
-		if(keyCommand == 'eval'){
-			keyLabels = [];
-			suffixes = [];
-			prefixes = [];
-		}
-	}
-	var resultset = null;
-	var dataLen = 0;
-	var idx = 0;
-	var baseCaseDone = false;
-	async.doWhilst(
-	function(callback){
-		var myKeySuffixes = chainedKeySuffixes[idx] || [];
-		var myArgs = chainedArgs[idx];
-// TODO clusterInstance has to be updated per keyChain
-		switch(cluster.getInstanceType(clusterInstance)){
-		default:
-			var keyTexts = [];
-			if(keyLabels.length > 0){
-				keyTexts.push((keyLabels.concat(keyFieldArray).concat(myKeySuffixes || [])).join(separator_key));
-			}
-			var queryArgs = keyTexts.concat(prefixes, myArgs, suffixes);
-			cluster_instance.getProxy()[keyCommand](queryArgs, function(err, output){
-				var errorMessage = 'FATAL: query.queryDB: args: '+keyCommand+'->'+queryArgs;
-				if(!utils.logError(err, errorMessage)){
-					if(!command.isOverRange(cmd)){
-						resultset = output;
-					}else{
-						if(utils.startsWith(command.getType(cmd), 'count')){
-							resultset = (resultset || 0) + output;
-							dataLen = resultset;
-						}else if(utils.startsWith(command.getType(cmd), 'range')){
-							resultset = resultset || [];
-							[].push.apply(resultset, output);
-							dataLen = resultset.length;
+			keyChainGetter(arg, function(err, nextChain){
+				if(!utils.logError(err, 'keyChainGetter error')){
+					var chainLen = (nextChain || []).length;
+					var nextMinorKeySuffix = key_field_suffixes[idx+1];
+					var secondMinorKeySuffix = key_field_suffixes[idx+2];
+					for(var i=0; i < chainLen; i++){
+						if(!nextMinorKeySuffix){				// the least significant keysuffix
+							var bucket = key_field_suffixes.map(function(ks){return utils.shallowCopy(ks);});
+							bucket[idx].keysuffix = datatype.encodeVal(nextChain[i], null, null, 'keysuffix', true);
+							keyChain.push(bucket);
+						}else{	// for higher significant keysuffixes, just (in/de)crement keysuffix
+							kfs.keysuffix = nextChain[i];
+							break;
 						}
+					}
+					// counting should be reset when next move is made to next significant keysuffix
+					// e.g. 1997, 1998, 1999, 2000, 2001, ..., 2002,
+					if(chainLen <= 0 && resetIdxCounter[idx]){
+						var noSuffixFound = 'cannot retrieve any keysuffix for field: '+field;
+						return then(noSuffixFound, null);
+					}else if(chainLen < arg.limit){
+						resetIdxCounter[idx] = true;
+						idx = idx-1;					// move to next significant keysuffix
+						arg.limit = 1;					// only one element required to reset counter
+					}else if(nextMinorKeySuffix){
+						resetIdxCounter[idx] = false;
+						idx = idx+1; 					// move to the next less significant keysuffix
+						arg.limit = (secondMinorKeySuffix ? 1 : limit); // limit is restored on the least significant keysuffix
 					}
 				}
 				callback(err);
 			});
+	}, function(err){
+		ret = {code:1};
+		if(!utils.logError(err, 'query.getKeyChain')){
+			ret = {code:0, data:keyChain};
 		}
-	},
-	function(){
-		if(dataLen < (limit || Infinity)){
-			return false;
+		then(err, ret);
+	});
+};
+
+// TODO: limit-offset across keyChains is not yet supported
+executeDecodeQuery = function executeDecodeQuery(meta_cmd, keys, key_field, index, range_config, attribute, misc, then){
+	var ret = {code:1};
+	var key = keys[0];
+	var keyConfig = datatype.getKeyConfig(key);
+	var fields = datatype.getConfigIndexProp(keyConfig, 'fields');
+	var keyLabels = [datatype.getKeyLabel(key)];
+	var keyFieldArray = (key_field != null ? [key_field] : []);
+	attribute = attribute || {};
+	var nx = attribute.nx;
+	var limit = (attribute.limit != null ? attribute.limit : Infinity);
+	var offset = attribute.offset;
+	var withscores = attribute.withscores;
+	var chainedKeyFieldSuffixes = [misc.fsa.keyfieldsuffixes || []];
+	var instanceDecisionFunction = misc.instancedecisionfunction;
+	var keySuffixIndex = utils.shallowCopy(misc.keysuffixindex);
+	var keyChainActive = false;
+	var stopKeySuffixes = null;
+	var resultset = null;
+	var dataLen = 0;
+	var idx = 0;
+	var whileCondition = null;
+	async.doWhilst(
+	function(callback){
+		var keyFieldSuffixes = chainedKeyFieldSuffixes[idx] || [];
+		if(keyChainActive){
+			// clusterInstance has to be updated per keyChain
+			// FYI: this happens only for command.isOverRange, in which case !command.isMulti
+			// construct new keySuffixIndex
+			for(var i=0; i < keyFieldSuffixes.length; i++){
+				var kfs = keyFieldSuffixes[i];
+				var kfsField = fields[kfs.fieldidx];
+				keySuffixIndex[kfsField] = kfs.keysuffix;
+			}
+			misc.clusterinstance = getQueryDBInstance(instanceDecisionFunction, meta_cmd, keys, keySuffixIndex, key_field);
 		}
-		if(idx < chainedKeySuffixes.length - 1){
-			idx++;
-		}else{	// refill keyChain
-			if(command.isOverRange(cmd)){
-				// if there's a keyChain, the next ranges should begin from the beginning of the storage
-				if(!baseCaseDone){
-					baseCaseDone = true;
-					var rangeMode = command.getRangeMode(cmd);
-					var startArgIndex = 0;
-					if(rangeMode == 'byscorelex'){						// keyCommand is <eval> in this case
-						var evalArgScoreIndex = 3;
-						var evalArgRankIndex = 5;
-						startArgIndex = evalArgRankIndex;
-					}
-					if(['byrank', 'bylex', 'byscore', 'byscorelex'].indexOf(rangeMode) >= 0){
-						var order = command.getOrder(cmd) || asc;
-						// NB: byrank and byscorelex have start position aligned with the direction
-						// => no need for changes based on range direction
-						if(order == asc){
-							args[startArgIndex] = ({byrank:0, bylex:'-', byscore:'-inf', byscorelex:0})[rangeMode];
-						}else{
-							args[startArgIndex] = ({byrank:0, bylex:'+', byscore:'+inf', byscorelex:0})[rangeMode];
-						}
-					}
+		var clusterInstance = misc.clusterinstance;
+		var clusterInstanceType = cluster.getInstanceType(clusterInstance);
+		if(keyChainActive){
+			// clusterInstanceType, hence other properties, may change
+			// normally this would have to be done only if the cluster-instance-type changed with the new keychain
+			// but there are a lot of tiny details with rangeconfigs to be sorted out; so always called for new details
+			// w.r.t. ranging, updating the fsa is enough trigger for the keyfieldsuffixes, uidprefixes & xidprefixes to be adjusted
+			// overwrite keysuffixes of misc.fsa, with new suffixes
+			misc.fsa.keyfieldsuffixes = keyFieldSuffixes;
+			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstanceType, meta_cmd, keys, range_config, attribute, key_field, misc.fsa);
+			misc.cmd = dbInstanceArgs.command;
+			misc.args = dbInstanceArgs.args;
+		}
+		var cmd = misc.cmd;
+		var cmdType = command.getType(cmd);
+		var cmdOrder = command.getOrder(cmd);
+		var isKeyChainCommand = command.isOverRange(cmd) && datatype.isConfigKeyChain(keyConfig);
+		var args = misc.args;
+		var ks = keyFieldSuffixes.map(function(kfs){return kfs.keysuffix;});
+		var keyTexts = [keyLabels.concat(keyFieldArray, ks).join(separator_key)];
+		async.series([
+		function(cb){
+			switch(clusterInstanceType){
+			default:
+				var keyText = keyTexts[0];
+				var clusterCommand = command.toRedis(cmd);
+				var suffixes = [];
+				var prefixes = [];
+				if(limit && limit != Infinity && !utils.startsWith(command.getType(cmd), 'count')){
+					[].push.apply(suffixes, ['LIMIT', offset || 0, limit]);
 				}
-				// get next keys in the chain
-				// TODO offset-ing across keyChains is not handled
-				// 	--> simply decrement current offset value with the count of targets in last key
-				var keyChain = getKeyChain(cmd, keys, key_type, key_field, chainedKeySuffixes[chainedKeySuffixes.length-1], limit);
-				chainedKeySuffixes = [];
-				chainedArgs = [];
-				idx = 0;
-				var evalArgKeyIndex = 2;
-				for(var j=0; j < keyChain.length; j++){
-					var kc = keyChain[j];
-					if(keyCommand == 'eval'){
-						// change the eval-args key
-						var newArgs = args.concat([]);
-						newArgs[evalArgKeyIndex] = kc;
-						chainedArgs.push(newArgs);
-						kc = [];					// eval requires no key prefix
+				if(withscores && !utils.startsWith(cmdType, 'rangebylex') && !utils.startsWith(cmdType, 'count')){
+					suffixes.unshift('WITHSCORES');
+				}
+				if(nx && utils.startsWith(cmdType, 'add')){
+					prefixes.unshift('NX');
+				}
+				if(clusterCommand == 'eval'){
+					keyTexts = [];
+					suffixes = [];
+					prefixes = [];
+				}
+				var queryArgs = keyTexts.concat(prefixes, args, suffixes);
+				var client = null;
+				try{
+					client = clusterInstance.getProxy();
+					var clab = cluster.getInstanceLabel(clusterInstance); 
+					if(!client){
+						throw Error('cannot establish connection, cluster:'+clab);
+					}else if(typeof client[clusterCommand] != 'function'){
+						throw Error(clusterCommand+' is not a command of the '+clusterInstanceType+' client');
 					}
-					chainedKeySuffixes.push(kc);
+					client[clusterCommand](queryArgs, function(err, output){
+						var errorMessage = 'FATAL: query.queryDB: args: '+clusterCommand+'->'+queryArgs;
+						if(utils.logError(err, errorMessage)){
+							return cb(err);
+						}
+						if(Array.isArray(output)){
+							resultset = resultset || [];
+							for(var i=0; i < output.length; i++){
+								var detail = null;
+								var uid = null;
+								var xid = null;
+								if(['z', 's'].indexOf(command.getType(cmd).slice(-1)) >= 0){
+									xid = null;
+									uid = output[i];
+									// zset indexes need withscores for completion of XID
+									// withscores is only applicable to zset ranges except bylex
+									if(withscores && command.isOverRange(cmd)
+										&& !utils.startsWith(command.getType(cmd), 'rangebylex')){
+										i++;
+										xid = output[i];
+									}
+								}else{
+									// TODO handle e.g. hgetall: does something similar to withscores
+									xid = output[i];
+									uid = args[i];		// TODO generally, how so?? think a bit about this!
+								}
+								var detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, key_field);
+								resultset.push(detail);
+							}
+							dataLen = resultset.length;
+						}else if(utils.startsWith(command.getType(meta_cmd), 'get')){
+							// NB: different keys may have different returns e.g. hmset NX
+							//	take care to be transparent about this
+							var xid = output;
+							var uid = args[0];
+							resultset = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, key_field);
+							dataLen = 1;
+						}else if(utils.startsWith(command.getType(cmd), 'count')){
+								resultset = (resultset || 0) + output;
+								dataLen = resultset;
+						}else{
+							resultset = output;
+						}
+						cb(err);
+					});
+				}catch(err){
+					return cb(err);
 				}
 			}
-		}
-		return (idx < chainedKeySuffixes.length);
-	},
-	function(err){
-		if(!utils.logError(err, 'queryDBInstance')){
+		},function(cb){
+			// TODO offset-ing across keyChains is not handled
+			// --> simply decrement current offset value with the count of targets in last keychain
+			// NB: more correctly, keychain operations should be made atomic with lua
+			// 	but this is only possible on a single server
+			//	hence this cross-server approximation has been made
+			// FYI: for offsetgroups, the first group-member fixes the keychain
+			if(dataLen < limit && isKeyChainCommand){
+				var lastKeyFieldSuffixes = chainedKeyFieldSuffixes[chainedKeyFieldSuffixes.length-1];
+				if(!keyChainActive){
+					keyChainActive = true;
+					var stopProp = range_config.stopProp;
+					var stopPropIdx = (stopProp != null ? datatype.getConfigFieldIdx(keyConfig, stopProp) : -1);
+					// NB: the order of key_field_suffixes is crucial; see comparison.getConfigFieldOrdering
+					// make a first-time ordering of the keysuffix fields according to storage ordering
+					// FYI: this procedure also filters off keysuffixes excluded from the range e.g. partition fields
+					var joint = new comparison.joint(stopProp, null);	// stopProp defines variable keysuffixes/keychains
+					var configOrd = comparison.getConfigFieldOrdering(keyConfig, null, joint);
+					var order = comparison.getOrdProp(configOrd, 'order');
+					var orderedKeyFieldSuffixes = [];
+					for(var i=0; i < order.length; i++){
+						for(var j=0; j < lastKeyFieldSuffixes.length; j++){
+							var fldIdx = lastKeyFieldSuffixes[j].fieldidx;
+							if(fldIdx == order[i]){
+								orderedKeyFieldSuffixes.push(lastKeyFieldSuffixes[j]);
+								break;
+							}
+						}
+					}
+					chainedKeyFieldSuffixes[chainedKeyFieldSuffixes.length-1] = orderedKeyFieldSuffixes;
+					lastKeyFieldSuffixes = orderedKeyFieldSuffixes;
+					// it is possible to stop further search by comparison with the stopKeyFieldSuffixes; prepare one
+					// else searches with stopValue behind startValue, would keep ranging on and on away from stopValue
+					stopKeyFieldSuffixes = orderedKeyFieldSuffixes.map(function(a){return utils.shallowCopy(a);});
+					var bound = (cmdOrder == asc ? datatype.getJSLastUnicode() : datatype.getJSFirstUnicode());
+					for(var i=stopKeyFieldSuffixes.length-1; i >= 0; i--){
+						var skfs = stopKeyFieldSuffixes[i];
+						var fldIdx = skfs.fieldidx;
+						if(fldIdx > stopPropIdx){
+							skfs.keysuffix = bound;
+							continue;
+						}else if(fldIdx == stopPropIdx){
+							if(range_config.stopValue != null){
+								var stopIndex = utils.shallowCopy(index);
+								stopIndex[stopProp] = range_config.stopValue;
+								skfs.keysuffix = datatype.splitConfigFieldValue(keyConfig, stopIndex, stopProp)[0];
+							}
+						}
+						break;
+					}
+				}
+				//  ensure that keychains are converging, not diverging, to stopValue 
+				for(var i=0; i < stopKeyFieldSuffixes.length; i++){
+					var stopKS = stopKeyFieldSuffixes[i].keysuffix;
+					var lastKS = lastKeyFieldSuffixes[i].keysuffix;
+					var fldIdx = lastKeyFieldSuffixes[i].fieldidx;	//= stopKeyFieldSuffixes[i].fieldidx
+					if(!datatype.isKeyFieldChainWithinBound(keyConfig, fldIdx, cmdOrder, stopKS, lastKS)){
+						break; 			// i.e. lastKS < stopKS
+					}else if(!datatype.isKeyFieldChainWithinBound(keyConfig, fldIdx, cmdOrder, lastKS, stopKS)){
+						whileCondition = false;
+						return(cb(null));	// i.e. lastKS > stopKS
+					}else if(i == stopKeyFieldSuffixes.length-1){
+						whileCondition = false;
+						return(cb(null));	// => complete equality on all keysuffixes
+					}
+				}
+				if(idx >= chainedKeyFieldSuffixes.length-1){
+					// get next keys in the chain
+					idx = 0;
+					getKeyChain(cmd, keys, keyConfig, key_field, lastKeyFieldSuffixes, limit, function(err, result){
+						if(!utils.logCodeError(err, result)){
+							chainedKeyFieldSuffixes = result.data;
+							var newKeyFieldSuffixes = chainedKeyFieldSuffixes[0] || [];
+							//  ensure that keychains are progressing i.e. prevent infinite loop
+							for(var i=0; i < newKeyFieldSuffixes.length; i++){
+								var newKS = newKeyFieldSuffixes[i].keysuffix;
+								var lastKS = lastKeyFieldSuffixes[i].keysuffix;
+								var fldIdx = lastKeyFieldSuffixes[i].fieldidx;	//= newKeyFieldSuffixes[i].fieldidx
+								if(!datatype.isKeyFieldChainWithinBound(keyConfig, fldIdx, cmdOrder, newKS, lastKS)){
+									break; 			// i.e. lastKS < newKS
+								}else if(!datatype.isKeyFieldChainWithinBound(keyConfig, fldIdx, cmdOrder, lastKS, newKS)){
+									var err = 'infinite loop detected; keychain values are not progression';
+									return(cb(err));	// i.e. lastKS > newKS
+								}else if(i == newKeyFieldSuffixes.length-1){
+									var err = 'infinite loop detected; keychain values are not progression';
+									return(cb(err));	// => complete equality on all keysuffixes
+								}
+							}
+							whileCondition = (idx < chainedKeyFieldSuffixes.length);
+						}
+						cb(err);
+					});
+				}else{
+					idx++;
+					whileCondition = (idx < chainedKeyFieldSuffixes.length);
+					cb(null);
+				}
+			}else{
+				whileCondition = false;
+				cb(null);
+			}
+		}],function(err){
+			callback(err);
+		});
+	}, function(){
+		return whileCondition;
+	}, function(err){
+		if(!utils.logError(err, 'executeDecodeQuery')){
 			ret = {code:0, data:resultset};
 		}
 		then(err, ret);
 	});
 };
 
-getClusterInstanceQueryArgs = function getClusterInstanceQueryArgs(cluster_instance, cmd, keys, index, rangeConfig, attribute, field, storage_attribute){
-	var key = keys[0];
-	var keyConfig = datatype.getKeyConfig(key);
-	var keyLabel = datatype.getKeyLabel(key);
-	var struct = datatype.getConfigStructId(keyConfig);
-	var lua = null;
-	var xid = storage_attribute.xid;
-	var uid = storage_attribute.uid;
-	var luaArgs = storage_attribute.luaArgs || [];
-	var keySuffixes = storage_attribute.keySuffixes;
-	var args = [];
-	var limit = (attribute || {}).limit;
-	switch(cluster.getInstanceType(cluster_instance)){
-	default:
-		return queryRedis.getCIQA(cluster_instance, cmd, keys, index, rangeConfig, attribute, field, storage_attribute);
-	}
-};
-
 getIndexFieldBranches = function getQueryIndexFieldBranches(config, index){
-	var fieldBranches = []; //[null];	// TODO ALWAYS make a main branch even if there are fieldBranches i.e. fieldbranch=null
+	var fieldBranches = [];
 	if(index == null){
 		index = {};
 	}
@@ -266,7 +416,6 @@ getIndexFieldBranches = function getQueryIndexFieldBranches(config, index){
 			fieldBranches.push(field);
 		}
 	}
-	// TODO remove this clause once above todo is done
 	if(fieldBranches.length == 0){
 		fieldBranches.push(null);
 	}
@@ -278,83 +427,85 @@ parseStorageAttributesToIndex = function parseQueryStorageAttributesToIndex(clus
 		return queryRedis.parseStorageAttributesToIndex(cmd, key, keyText, xid, uid, field_branch)
 	}
 }
-getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
+batchMergeQuery = function batchMergeQuery(meta_cmd, keys, qData_list, then){
 	var ret = {code:1};
 	var len = (qData_list || []).length;
 	var instanceKeySet = {};
 	var key = keys[0];
 	var keyLabel = datatype.getKeyLabel(key);
 	var keyConfig = datatype.getKeyConfig(key);
-	var isRangeCommand = command.isOverRange(original_cmd);
+	var instanceDecisionFunction = datatype.getKeyClusterInstanceGetter(key);
+	var isRangeCommand = command.isOverRange(meta_cmd);
 	// PREPROCESS: prepare instanceKeySet for bulk query execution
 	for(var i=0; i < len; i++){
 		var elem = qData_list[i];
 		var rangeConfig = (isRangeCommand ? elem.rangeconfig : null);
 		var index = (isRangeCommand ? rangeConfig.index : elem.index) || {};
-		var attribute = elem.attribute || {};							// limit, offset, nx, etc
+		var attribute = elem.attribute || {};					// limit, offset, nx, etc
 		var fieldBranches = getIndexFieldBranches(keyConfig, index);
-		var cache = {storageAttr:{}, clusterInstance:{}, clusterInstanceId:{}};
+		// parseIndexToStorageAttributes returns results for all fieldBranches, so cache
+		var storageAttrCache = {};
 		// process different field-branches; vertical partitioning
 		for(j=0; j < fieldBranches.length; j++){
 			var fieldBranch = fieldBranches[j];
-			var clusterInstance = cache.clusterInstance[fieldBranch];
-			if(clusterInstance == null){
-				clusterInstance = getQueryDBInstance(original_cmd, keys, index, fieldBranch);
-				cache.clusterInstance[fieldBranch] = clusterInstance;
+			if(fieldBranch != null && !(fieldBranch in index)){		// NB: fieldBranch can be NULL
+				continue;
 			}
-			var clusterInstanceId = cache.clusterInstanceId[fieldBranch];
-			if(clusterInstanceId == null){
-				clusterInstanceId = cluster.getInstanceId(clusterInstance);
-				cache.clusterInstanceId[fieldBranch] = clusterInstanceId;
+			var keySuffixIndex = datatype.getKeyFieldSuffixIndex(key, fieldBranch, index);
+			var clusterInstance = getQueryDBInstance(instanceDecisionFunction, meta_cmd, keys, keySuffixIndex, fieldBranch);
+			var clusterInstanceId = cluster.getInstanceId(clusterInstance);
+			var clusterInstanceType = cluster.getInstanceType(clusterInstance);
+			if(storageAttrCache[fieldBranch] == null){
+				// returns already dict of all fieldBranches
+				storageAttrCache = parseClusterInstanceIndexToStorageAttributes(clusterInstanceType, key, meta_cmd, index, rangeConfig);
 			}
-			var fsa = cache.storageAttr[fieldBranch];
-			if(fsa == null){
-				switch(cluster.getInstanceType(clusterInstance)){
-				default:
-					var storageAttr = queryRedis.parseIndexToStorageAttributes(key, original_cmd, index);
-					fsa = storageAttr[fieldBranch];
-					cache.storageAttr = storageAttr;	// returns already dict of all fields
-				}
-			}
-			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstance, original_cmd, keys, index, rangeConfig, attribute, fieldBranch, fsa);
-			
+			var fsa = storageAttrCache[fieldBranch];
+			var dbInstanceArgs = getClusterInstanceQueryArgs(clusterInstanceType, meta_cmd, keys, rangeConfig, attribute, fieldBranch, fsa);
 			// bulk up the different key-storages for bulk-execution
 			var keyText = dbInstanceArgs.keytext;
 			if(!instanceKeySet[clusterInstanceId]){
-				instanceKeySet[clusterInstanceId] = {_dbinstance: clusterInstance, _keytext: {}};
+				instanceKeySet[clusterInstanceId] = {};
 			}
-			if(!instanceKeySet[clusterInstanceId]._keytext[keyText]){
-				instanceKeySet[clusterInstanceId]._keytext[keyText] = {};
-				instanceKeySet[clusterInstanceId]._keytext[keyText].attribute = attribute;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranch = fieldBranch;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes = fsa.keySuffixes;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount = fieldBranches.length;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].cmd = dbInstanceArgs.command;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].index = index;
-				instanceKeySet[clusterInstanceId]._keytext[keyText].args = [];
-				instanceKeySet[clusterInstanceId]._keytext[keyText].indexes = [];
+			if(!instanceKeySet[clusterInstanceId][keyText]){
+				var misc = {clusterinstance: clusterInstance,
+						instancedecisionfunction: instanceDecisionFunction,
+						cmd: dbInstanceArgs.command,
+						fsa: fsa,
+						keysuffixindex: keySuffixIndex,
+						args: [],
+					};
+				instanceKeySet[clusterInstanceId][keyText] = {};
+				instanceKeySet[clusterInstanceId][keyText].attribute = attribute;
+				instanceKeySet[clusterInstanceId][keyText].fieldBranch = fieldBranch;
+				instanceKeySet[clusterInstanceId][keyText].fieldBranchCount = fieldBranches.length;
+				instanceKeySet[clusterInstanceId][keyText].misc = misc;
+				// index/rangeConfig make sense only for !command.isMulti
+				// else only first index is logged
+				instanceKeySet[clusterInstanceId][keyText].index = index;
+				instanceKeySet[clusterInstanceId][keyText].rangeconfig = rangeConfig;
 			}
-			[].push.apply(instanceKeySet[clusterInstanceId]._keytext[keyText].args, dbInstanceArgs.args);
+			[].push.apply(instanceKeySet[clusterInstanceId][keyText].misc.args, dbInstanceArgs.args);
 		}
 	}
 	var resultset = null;
 	var resultsetLength = 0;
 	var resultType = null;	// 'array', 'object', 'scalar'
 	var fuidIdx = {};
-	var instanceFlags = Object.keys(instanceKeySet);
-	async.each(instanceFlags, function(clusterInstanceId, callback){
-		var clusterInstance = instanceKeySet[clusterInstanceId]._dbinstance;
-		var ks = Object.keys(instanceKeySet[clusterInstanceId]._keytext);
+	var instanceIds = Object.keys(instanceKeySet);
+	async.each(instanceIds, function(clusterInstanceId, callback){
+		var ks = Object.keys(instanceKeySet[clusterInstanceId]);
 		async.each(ks, function(keyText, cb){
-			var newKeys = instanceKeySet[clusterInstanceId]._keytext[keyText].newKeys;
-			var fieldBranch = instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranch;
-			var keySuffixes = instanceKeySet[clusterInstanceId]._keytext[keyText].keySuffixes;
-			var fieldBranchCount = instanceKeySet[clusterInstanceId]._keytext[keyText].fieldBranchCount;
-			var cmd = instanceKeySet[clusterInstanceId]._keytext[keyText].cmd;
-			var index = instanceKeySet[clusterInstanceId]._keytext[keyText].index;
-			var args = instanceKeySet[clusterInstanceId]._keytext[keyText].args;
-			var attribute = instanceKeySet[clusterInstanceId]._keytext[keyText].attribute;
-			queryDBInstance(clusterInstance, cmd, keys, keyConfig, fieldBranch, keySuffixes, index, args, attribute, function(err, result){
+			var newKeys = instanceKeySet[clusterInstanceId][keyText].newKeys;
+			var attribute = instanceKeySet[clusterInstanceId][keyText].attribute;
+			var fieldBranch = instanceKeySet[clusterInstanceId][keyText].fieldBranch;
+			var fieldBranchCount = instanceKeySet[clusterInstanceId][keyText].fieldBranchCount;
+			var index = instanceKeySet[clusterInstanceId][keyText].index;
+			var rangeConfig = instanceKeySet[clusterInstanceId][keyText].rangeconfig;
+			var misc = instanceKeySet[clusterInstanceId][keyText].misc;
+			var clusterInstance = misc.clusterinstance;
+			var cmd = misc.cmd;
+			var args = misc.args;
+			executeDecodeQuery(meta_cmd, keys, fieldBranch, index, rangeConfig, attribute, misc, function(err, result){
 				// POST-PROCESS
 				if(!utils.logCodeError(err, result)){
 					var clusterInstanceType = cluster.getInstanceType(clusterInstance);
@@ -363,29 +514,11 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 						resultType = 'array';
 						isRangeCommand = command.isOverRange(cmd);
 						// although resultset is actually an array i.e. with integer indexes,
-						// dict is used to maintain positioning/indexing when elements are deleted
+						// dict is used in order to maintain positioning/indexing when elements are deleted
 						// 	fuidIdx references these positions/indexes
 						resultset = resultset || {};
 						for(var i=0; i < result.data.length; i++){
-							var detail = null;
-							var uid = null;
-							var xid = null;
-							if(['z', 's'].indexOf(command.getType(cmd).slice(-1)) >= 0){
-								xid = null;
-								uid = result.data[i];
-								// zset indexes need withscores for completion of XID
-								// withscores is only applicable to zset ranges except bylex
-								if(withscores && utils.startsWith(command.getType(cmd), 'range') 
-									&& !utils.startsWith(command.getType(cmd), 'rangebylex')){
-									i++;
-									xid = result.data[i];
-								}
-							}else{
-								// TODO handle e.g. hgetall: does something similar to withscores
-								xid = result.data[i];
-								uid = args[i];		// TODO generally, how so?? think a bit about this!
-							}
-							detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, fieldBranch);
+							var detail = result.data[i];
 							// querying field-branches can result in separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var fuid = detail.fuid;
@@ -429,11 +562,9 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 					}else{
 						// NB: different keys may have different returns e.g. hmset NX
 						//	take care to be transparent about this
-						var xid = result.data;
 						if(utils.startsWith(command.getType(cmd), 'get')){
 							resultType = 'object';
-							var uid = args[0];
-							var detail = parseStorageAttributesToIndex(clusterInstanceType, cmd, key, keyText, xid, uid, fieldBranch);
+							var detail = result.data;
 							// querying field-branches can result is separated resultsets; merge them into a single record
 							if(detail.field != null){
 								var field = detail.field;
@@ -455,6 +586,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 							}
 						}else{
 							resultType = 'scalar';
+							var xid = result.data;
 							if(utils.isInt(xid)){
 								// NB: when zcount/etc is used on field-branches, the average count is returned!!
 								var count = parseInt(xid, 10);
@@ -484,7 +616,7 @@ getResultSet = function getQueryResultSet(original_cmd, keys, qData_list, then){
 			ret.data = (resultset == label_lua_nil ? null : resultset);
 		}
 		ret.keys = keys;	// sometimes this is required in order to examined query results; see e.g. join.mergeStreams
-		if(!utils.logError(err, 'FATAL: query.getResultSet')){
+		if(!utils.logError(err, 'FATAL: query.batchMergeQuery')){
 			ret.code = 0;
 		}else{
 			ret.code = 1;	// announce partial success/failure
@@ -613,13 +745,16 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 	}
 	var singleIndexList = [singleIndex];
 	if(partitionCrossJoins.length == 0){
-		return getResultSet(cmd, keys, singleIndexList, then);
+		return batchMergeQuery(cmd, keys, singleIndexList, then);
 	}else{
 		// merge query results in retrieval order
 		var partitionResults = [];
 		var partitionIdx = [];
 		var pcjIndexes = Object.keys(partitionCrossJoins);
-		var limit = (attribute || {}).limit || Infinity;
+		var limit = (attribute || {}).limit;
+		if(limit == null){
+			limit = Infinity;
+		}
 		var mergeData = null;
 		async.each(pcjIndexes, function(idx, callback){
 			var pcj = partitionCrossJoins[idx];
@@ -627,7 +762,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 				indexClone[prop] = pcj[prop];
 			}
 			singleIndex.rangeconfig.index = indexClone;
-			getResultSet(cmd, keys, singleIndexList, function(err, result){
+			batchMergeQuery(cmd, keys, singleIndexList, function(err, result){
 				partitionResults[idx] = (result || []).data;
 				callback(err);
 			});
@@ -703,7 +838,7 @@ query.indexListQuery = function getIndexListQuery(cmd, key, index_list, then){
 	if(!command.isMulti(cmd)){
 		return then(new Error('This command does not take multiple indexes!'));
 	}
-	getResultSet(cmd, [key], index_list, then);		// TODO make [key] non-array argument
+	batchMergeQuery(cmd, [key], index_list, then);		// TODO make [key] non-array argument
 }
 
 

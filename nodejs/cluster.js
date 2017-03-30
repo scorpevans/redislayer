@@ -4,7 +4,7 @@ var redisDB = require('redis');
 //	the redislayer cluster is composed of several cluster-instances
 
 var cluster = {
-	defaultinstancelabel: null,	// every redislayer-instance should have a default real-world cluster-instance
+	defaultinstance: null,	// every redislayer-instance should have a default real-world cluster-instance
 };	
 
 var access_code = 'cluster._do_not_access_fields_with_this';
@@ -12,23 +12,31 @@ var access_code = 'cluster._do_not_access_fields_with_this';
 
 var clusterList = {};
 
-cluster.getDefaultLabel = function getDefaultClusterLabel(){
-	return cluster.defaultinstancelabel;
+// the default-instance could be used for e.g. ID-generation
+// or similar queries which don't take any Index, hence cannot be routed otherwise
+// see clusterinstance in dtree.js 
+cluster.getDefault = function getDefaultCluster(){
+	return cluster.defaultinstance;
 };
 
-cluster.setDefaultLabel = function setDefaultClusterLabel(cluster_label){
-	cluster.defaultinstancelabel = cluster_label;
+cluster.getDefaultId = function getDefaultClusterId(){
+	var instance = cluster.getDefault();
+	return (instance != null ? instance.getId() : null);
+};
+
+cluster.getDefaultLabel = function getDefaultClusterLabel(){
+	var instance = cluster.getDefault();
+	return (instance != null ? instance.getLabel() : null);
 };
 
 cluster.getList = function getClusterList(cluster_label){
 	return (cluster_label == null ? clusterList : clusterList[cluster_label]);
 };
 
-// the default-instance could be used for e.g. ID-generation
-// or similar queries which don't take any Index, hence cannot be routed otherwise
-// see clusterinstance in dtree.js 
-cluster.getDefault = function getDefaultCluster(){
-	return cluster.getList(cluster.getDefaultLabel());
+cluster.setDefaultByLabel = function setDefaultClusterByLabel(cluster_label){
+	var instance = cluster.getList(cluster_label);
+	cluster.defaultinstance = instance;
+	return instance;
 };
 
 cluster.remove = function removeCluster(cluster_label){
@@ -61,9 +69,12 @@ cluster.loadList = function loadClusterList(clist){
 		var getType = eval('(function(){return "'+inst.type+'";})');
 		var getLabel = eval('(function(){return "'+inst.label+'";})');
 		var myInstance = {};
+		myInstance.getId = getId;
+		myInstance.getType = getType;
+		myInstance.getLabel = getLabel;
 		for(var r in inst.role){
 			myInstance[r] = function(){};
-			myInstance[r].getProxy = eval('(function(){return clist['+i+'].role["'+r+'"].proxy;})');
+			myInstance[r].getProxy = eval('(function(){return clist['+i+'].role["'+r+'"].proxy();})');
 			myInstance[r].getId = getId;
 			myInstance[r].getType = getType;
 			myInstance[r].getLabel = getLabel;

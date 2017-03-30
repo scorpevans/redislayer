@@ -59,44 +59,44 @@ var dtree = {
 		 * @param	{object}	arg.keyfield - possible field-branch; see fieldprependskey
 		 * @return	{object}	the cluster-instance on which to perform a query
 		 */
-		clusterinstance: function(arg){return rl.getDefaultCluster().master;},
+		getclusterinstance: function(arg){return rl.getDefaultCluster().master;},
 		/**
-		 * provide a function returning minimum bound to help terminate iterating across key-chains; see offsets
-		 * such a function could infer this by e.g. querying the minimum values of fields
-		 * since different fields may have dramatically different bounds, this function is most useful on the field-level
-		 * @return	{string}	the minimum value
-		 */
-		minvalue: null,
+		* provide an asynchronous function returning minimum bound to help terminate iterating across key-chains; see offsets
+		* such a function could infer this by e.g. querying the minimum values of fields
+		* since different fields may have dramatically different bounds, this function is most useful on the configgetter-level
+		* @callback
+		* @return	{string}	the minimum value
+		*/
+		getminfieldvalue: null,
 		/**
-		 * provide a function returning maximum bound to help terminate iterating across key-chains; see offsets
-		 * such a function could infer this by e.g. querying the maximum values of fields
-		 * since different fields may have dramatically different bounds, this function is most useful on the field-level
-		 * @return	{string}	the maximum value
-		 */
-		maxvalue: null,
+		* provide an asynchronous function returning maximum bound to help terminate iterating across key-chains; see offsets
+		* such a function could infer this by e.g. querying the maximum values of fields
+		* since different fields may have dramatically different bounds, this function is most useful on the configgetter-level
+		* @callback
+		* @return	{string}	the maximum value
+		*/
+		getmaxfieldvalue: null,
+
 		/**
-		 * expedite iterating through key-chains by making optimal increments
-		 * provide a function which returns the next value after given key-suffix
-		 * @param	{string}	the key-suffix whose next value is to be computed
-		 * @return	{string}	the next key-suffix
+		 * provide an asynchronous function which returns the next list of keysuffixes of a given field; see [offsets]
+		 * for integer fields, a default is provided; this default still requires getminfieldvalue and getmaxfieldvalue defined
+		 * NB: for the default implementation, the keychain stays within the prefixInfo (e.g. 999, 9991, 9992,...: offset=603)
+		 *	if other keysuffixes are desired (e.g. 1000, 1001, 1002, ...), a fulljoin can be made use of; see join.js
+		 * @param	{object}	arg - a dict
+		 * @param	{object}	arg.key - the key in question
+		 * @param	{object}	arg.field - the field in question
+		 * @param	{string}	arg.keysuffix - the value from which to search exclusively; null value means start from the beginning
+		 * @param	{string}	arg.order - getAscendingOrderLabel() or getDescendingOrderLabel();  indicating the direction of search
+		 * @param	{int}		arg.limit - the number of keysuffixes to return 
+		 * @return	{object}	a list of key-suffix strings	
 		 */
-		nextchain: null,
-		/**
-		 * expedite iterating through key-chains by making optimal decrements
-		 * provide a function which returns the previous value after given key-suffix
-		 * @param	{string}	the key-suffix whose previous value is to be computed
-		 * @return	{string}	the previous key-suffix
-		 */
-		previouschain: null,
+		getnextkeychain: null,				// see default_get_field_next_chain in datatype.js for a sample implementation
 	},
 	structs:[{						// this structure ([{},...]) helps distinguish lists from values
 		id:	zset,	// redis sorted-set struct
 		structgetter: {
 			clusterinstance: null,
-			minvalue: null,
-			maxvalue: null,
 			nextchain: null,
-			previouschain: null
 		},
 		configs: [{
 			id:	'zset_membership',
@@ -116,7 +116,7 @@ var dtree = {
 				/**
 				 * specify if the name of the field itself (as opposed to the value) should be appended to the key-label
 				 * this cosmetic helps label keys nicely, and also serves for vertical partitioning
-				 * WARNING! UID should be a unique-identifier without field-branch inclusions; see offsetprependsuid prop
+				 * WARNING! UID should be a unique-identifier even without field-branch inclusions; see offsetprependsuid prop
 				 *	in fact, field-branches should not be put into UID; this is a sign of a bad configuration
 				 *	otherwise there's no reference to use to rebuild the object after it is branched for storage
 				 *	see offsetprependsuid
@@ -128,29 +128,35 @@ var dtree = {
 				 * also some field values may be prefixed/suffixed with namespace info making them too long
 				 *	such info can also be split off to be suffixed to the key
 				 * such splits, and subsequence suffixing of keys leads to horizontal partitioning
-				 *	the entire chain of keys resulting such partitioning is know as key-chain
+				 *	the entire chain of keys resulting from such partitioning is know as keychain
 				 * <offset> % 100 specifies the number of chars to remove from the front of the value i.e. prefix-info
 				 * <offset> / 100 specifies the number of trailing chars of the remaining value to retain
-				 * e.g. offset=42 on value='10004567' would suffix the key with '100045' and retain '67'
-				 * 	whereas offset=49 on value='10004567' would suffix the key with '1000' and retain '4567'
+				 * e.g. offset=204 on value='10004567' would suffix the key with '100045' and retain '67'
+				 * 	whereas offset=904 on value='10004567' would suffix the key with '1000' and retain '4567'
 				 * 	offset=null means don't make any suffixing
 				 *	offset=0 means suffix the key with the entire value of the field
 				 *		if offset!=0 but (offset/100)=0, it implies keep everything after doing the offset%100 part
-				 *		hence offset=05 suffices when offset=9999999999905 is intended
+				 *		hence offset=5 suffices when offset=9999999999905 is intended
 				 * NB: offsetted fields are required in all queries since they help define the key to query
 				 * 	hence it's not advisable to offset fields which change frequently
 				 *	since updating requires knowledge of the existing value, then a delete, followed by an insert
+				 * NB: the prefix-info part is the search-space of a keyschain; see also getnextkeychain
+				 * 	this means a fulljoin (see join.js) is required inorder to fetch keychains with different prefix-infos
 				 */
-				offsets: [null, 600+idPrefixInfoOffset, idPrefixInfoOffset],
+				offsets: [null, 600+idPrefixInfoOffset, idPrefixInfoOffset],	// NB: entityid's key-suffix subsumes that of memberid
 				/**
 				 * if the design is such that several fields would produce the same keysuffix,
 				 * designate the index of only one of them to take care of this; instead of repeating the same suffix in the key
-				 * with offsetgroups, several fields can be tried to find keysuffixes in cases of NULL values
+				 * i.e. offsetgroup value tells the index of the keysuffix of the offsetgroup fields
+				 * with offsetgroups, several fields can be tried to find keysuffixes in cases of NULL values IFF there's no subsumption
 				 * 	this is useful for zset.zscore and zset.range, which miss either a value in the Member or Score
 				 *	in case keysuffixing is made, the key can be made out in both commands only if there are offsetgroups
 				 *	between the Member and Score i.e. the keysuffix can be picked from either the Member or Score
+				 * WARNING: keysuffixes are currently not check as to whether they subsume all values of the fields of the offsetgroup
+				 *	=> client should ensure that the first-occuring field of the offsetgroup, subsumes all others
+				 *		else keysuffix cannot be used to rebuild other fields afterwards
 				 */
-				offsetgroups: [null, 1, 1],			// entityid's key-suffix subsumes that of memberid
+				offsetgroups: [null, 1, 1],		// NB: entityid would still be required in all commands since its offset subsumes
 				/**
 				 * specify whether the value (possibly offsetted) should contribute towards the <unique field> stored
 				 * this prop composes the unique-id (UID) of a given object
@@ -170,6 +176,11 @@ var dtree = {
 				 * specify the different factors by which field values should be multiplied, before their summation
 				 * this is used for the scores of redis sorted-sets
 				 * NULL or 0 value indicates field should not be included in summation
+				 * redis-scores cannot distinguish between NULL and 0
+				 *	=> use [offsetprependsuid] if this is required, or use [offsets] since the keysuffix encodes NULL
+				 * NB: obviously addition of opposite signs or floats would corrupt the data; use offsetprependsuid instead
+				 * TODO handle negative addends; e.g. makes sense only when a single field is stored in the score
+				 * TODO change value input to x for x in 10^x; prevents mistakes/mischiefs
 				 */
 				factors: [redisMaxScoreFactor, 1],	// applies only to sorted-sets
 				/**
@@ -181,29 +192,27 @@ var dtree = {
 			// obviously, inner getters/settings take precedence over outter ones
 			configgetter: {
 				// let's route different key-chains into different clusters
-				clusterinstance: function(arg){
+				getclusterinstance: function(arg){
 						var ksi = arg.keysuffixindex;	// NB: note keysuffixindex definition above
 						if(ksi.entityid == '9991'){
-							return rl.getCluster().redis6379.master;
-						}else{
 							return rl.getDefaultCluster().master;
+						}else{
+							return rl.getCluster().redis6380.master;
 						} 
 					},
-				minvalue: [],			// these are defined per field
-				maxvalue: [],
-				nextchain: [],
-				previouschain: [],
+				getminfieldvalue: [null, getGroupMinId, null],
+				getmaxfieldvalue: [null, getGroupMaxId, null],
+				getnextkeychain: [null, null, null],
 			},
 			keys:	[{
 				id:	'zkey_membership',				// id reference to this key
 				label:	'redislayer:example:entity:members',		// the name of the key within the database
 				// inner definitions of getters take precedence over outer ones
 				keygetter: {
-					clusterinstance: null,
-					minvalue: [],
-					maxvalue: [],
-					nextchain: [],
-					previouschain: [],
+					getclusterinstance: null,
+					getminfieldvalue: [],
+					getmaxfieldvalue: [],
+					getnextkeychain: [],
 				}
 			}]
 		}]
@@ -231,13 +240,13 @@ dtree =	{
 				id:'hkey_group',
 				label:'redislayer:example:group:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster().redis6379.master;},
+					getclusterinstance: function(arg){return rl.getCluster().redis6379.master;},
 				}
 				},{
 				id:'hkey_user',
 				label:'redislayer:example:user:detail',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster().redis6380.master;},
+					getclusterinstance: function(arg){return rl.getCluster().redis6380.master;},
 				}
 			}]
 			},{
@@ -261,12 +270,30 @@ dtree =	{
 				id:'skey_userid',
 				label:'redislayer:example:user:id',
 				keygetter:	{
-					clusterinstance: function(arg){return rl.getCluster().redis6380.master;},
+					getclusterinstance: function(arg){return rl.getCluster().redis6380.master;},
 				}
 			}],
 		}]
 	}],
 };
+
+function getGroupMinId(then){
+	var prefix = '999';					// since prefixing was done in example.js
+	then(null, prefix+'0');
+};
+function getGroupMaxId(then){
+	var key = rl.getKey().hkey_entityid;
+	var index = {entitytype:'groupid'};
+	var queryArg = {key:key,
+			cmd:key.getCommand().get,
+			indexorrange: index};
+	rl.singleIndexQuery(queryArg, function(err, result){
+		var prefix = '999';				// since prefixing was done in example.js
+		var value = ((result || {}).data || {}).increment;
+		then(err, prefix+value);
+	});
+};
+
 
 rl.loadDatatypeTree({dtree:dtree});
 

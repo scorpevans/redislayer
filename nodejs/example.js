@@ -2,8 +2,8 @@
 // NB: compliment these examples with the documentation in redislayer.js
 // WARNING: this example would create keys of the form "redislayer:example:*" in your redis database
 //	of course you can easily delete these keys with the linux commands:
-//	- redis-cli -p 6379 keys "redislayer:*" | xargs redis-cli -p 6379 del
-//	- redis-cli -p 6380 keys "redislayer:*" | xargs redis-cli -p 6380 del
+//	- redis-cli -p 6379 keys "redislayer:example:*" | xargs redis-cli -p 6379 del
+//	- redis-cli -p 6380 keys "redislayer:example:*" | xargs redis-cli -p 6380 del
 
 var rl = require('./redislayer');
 var dtree = require('./dtree');
@@ -15,7 +15,7 @@ var async = require('async');
 
 //rl.loadClusterList({clist:clist});		// load list of clusters; already done in dtree.js
 //rl.loadDatatypeTree({dtree:dtree});		// load datatype tree; already done in dtree.js
-rl.setDefaultClusterLabel('redis6379');		// set default cluster for this instance of redislayer
+rl.setDefaultClusterByLabel('redis6379');	// set default cluster for this instance of redislayer
 
 
 // QUERYING
@@ -53,7 +53,7 @@ createEntities = function(entity_list, entity_type, id_arg, entity_arg, then){
 				err = '1: '+err;
 				callback(err);
 			}else{
-				var entityId = '999'+result.data;	// '999' is the 3-digit idPrefixInfo specified in dtree.js
+				var entityId = '999'+result.data;	// '999' is used as a prefixInfo
 				entityIndex.entityid = entityId;
 				entityIndex.firstnames = entityIndex.firstnames+' '+entityId;
 				entityIndex.comment = entityIndex.comment+'_'+entityId;
@@ -103,9 +103,9 @@ oopsCaseErrorResult = function(mycase, err, result, logResult){
 
 
 
-var numberOfUsers = 1000;
-var numberOfGroups = 1000;
-var membershipCycles = 100;
+var numberOfUsers = 2000;
+var numberOfGroups = 2000;
+var membershipCycles = 200;
 var 	range7 = null,
 	range8 = null,
 	attr7 = null,
@@ -315,6 +315,7 @@ case 6:
 // RANGERS
 
 // EXERCISE: note that ranging can potentially be across partitions, key-chains and clusters
+//	- note that depending on the boundaries of the range, redislayer chooses the appropriate range-command variant
 //	- note how the range-properties are used to configure the range-index
 //	- note how range partitions are specified
 //	- note how to provide cursor and attribute arguments to range functions so they can be used in joins later
@@ -358,7 +359,7 @@ case 11:
 	// the startProp and stopProp basically says we want members of the entityid=9991952000
 	range7.startProp = 'entityid';
 	range7.stopProp = 'entityid';
-	range7.boundValue = null;
+	range7.stopValue = null;
 	range7.excludeCursor = false;
 	attr7 = {limit:10, withscores:true};		// withscores since the isadmin property is in the score
 	if(cases[sequence] == 7){
@@ -390,10 +391,10 @@ case 9:
 			entityid: 9991952000,
 			memberid: 99918000};
 	range9 = new rl.rangeConfig(index);
-	// the startProp, stopProp and boundValue, imply we want members of the entityids from 9991952000 to 9991990000
+	// the startProp, stopProp and stopValue, imply we want members of the entityids from 9991952000 to 9996000000
 	range9.startProp = 'entityid';
 	range9.stopProp = 'entityid';
-	range9.boundValue = 9991990000;
+	range9.stopValue = 9996000000;
 	range9.excludeCursor = false;
 	attr9 = {limit:10, withscores:true};
 	if(cases[sequence] == 9){
@@ -412,7 +413,7 @@ case 9:
 //	- note the use of the jointMap; note it can be provided along with the stream's resultset or when joining
 //	- note the use of namespacing
 //	-     without namespaces conflicting field-names are mangled; joint-fields are always merged under the name of the joints
-//	-     you don't want automatic mangling of field-names because you can't rely any names for further joins
+//	-     you don't want automatic mangling of field-names because you can't rely on names for further joins
 
 case 10:
 
@@ -436,7 +437,7 @@ case 10:
 	joinConfig.setModeList();
 	joinConfig.streamConfigs = [case8Stream, case9Stream];
 	joinConfig.joint = new rl.joint(null, 'memberid');		// the from-to range that the join focuses on
-	joinConfig.limit = 20;						// NB: this is useful even in case of modeCount()
+	joinConfig.limit = 100;						// NB: this is useful even in case of modeCount()
 	if(cases[sequence] == 10){
 		console.log('\n#### CASE 10: inner-join the ranges from cases 8 and 9 ####');
 		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){

@@ -1,12 +1,20 @@
-* allow separate configs per field-branch
-* error-classes
-* test
-* logging and log-levels
-* buildConfigLookup(config): change most of the functions to lookups, by examining configs onload
-	also move command properties into command-dict: {, property{ismulti:true, isreader:false, requireuid:true, ..}}
-* include other cluster types
-* refactor
-* one-to-many joins
-...
-* consider validation of fields, defaults, constraints, etc
-* consider advanced sql-like queries
+simplify/correct comparison.js logics; see file
+
+capture UIDs separately from member-suffixes for zset; this help abstract better CRUD commands
+e.g. some get-commands have to be a range if additional info is appended to the member
+
+one-to-many joins; includiing Offsetting
+
+test
+
+logging and log-levels
+
+buildConfigLookup(config): change most of the functions to lookups, by examining configs onload
+also move command properties into command-dict: {, property{ismulti:true, isreader:false, requireuid:true, ..}}
+
+include other cluster types
+
+include object.js layer which would allow compound objects with different config types
+this layer can also have validation of fields, defaults, constraints, etc
+
+consider advanced sql-like queries

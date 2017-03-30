@@ -116,6 +116,11 @@ comparison.mergeFieldMasks = function mergeComparisonFieldMasks(outer_fm, inner_
 comparison.fieldOrd = function comparisonFieldOrd(){
 	var ord = {	keytext:[], score:[], uid:[],		// ordering of joint fieldmasks
 			joints:[],				// all fields to be compared for ordering, ordered by fieldindex
+			// it's difficult to decide how multiple key-suffixes are to be ordered
+			// assume keysuffixing/splitting is only necessary for some storages or for partitioning
+			// hence create an ordering which considers full values in Score and then UID
+			// such ordering would transcend partitioning changes and other irrelevant details
+			order:[],
 			// TODO propmask can be deprecated by using just stripping of possible namespaces
 			propmask: new comparison.fieldMask(),	// map from fieldmask to prop from which it was mangled
 			fieldmask: new comparison.fieldMask(),	// map from fieldmask to config field
@@ -181,7 +186,7 @@ comparison.resetOrdMasks = function resetComparisonOrdMasks(ord){
 	}
 };
 
-
+// TODO reprecate; see ord.order
 comparison.normalizeOrd = function normalizeComparisonOrd(ord){
       	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
 	// this also reduces unnecessary comparisons
@@ -230,6 +235,7 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 	var score = comparison.getOrdProp(ord, 'score');
 	var uid = comparison.getOrdProp(ord, 'uid');
 	var joints = comparison.getOrdProp(ord, 'joints');
+	var order = comparison.getOrdProp(ord, 'order');
 	var fields = datatype.getConfigIndexProp(config, 'fields');
 	var partitions = datatype.getConfigIndexProp(config, 'partitions');
 	var jointPartitions = comparison.getJointPartitions(joint) || [];
@@ -237,9 +243,14 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 	var to = (joint || {}).to;
 	var fromField = comparison.getMaskField(fieldmask, from);
 	var toField = comparison.getMaskField(fieldmask, to);
-	var fromIdx = datatype.getConfigFieldIdx(config, fromField) || -Infinity;
-	var toIdx = datatype.getConfigFieldIdx(config, toField) || Infinity;
-	var scoreFieldIdx = {};
+	var fromIdx = datatype.getConfigFieldIdx(config, fromField);
+	if(fromIdx == null || fromIdx < 0){
+		fromIdx = -Infinity;
+	}
+	var toIdx = datatype.getConfigFieldIdx(config, toField);
+	if(toIdx == null || toIdx < 0){
+		toIdx = Infinity;
+	}
 	// NB: iteration is done in field-index order since e.g. uid- and key- prepends are also done in this order
 	for(var i=0; i < fields.length; i++){
 		var fieldIdx = i;
@@ -263,7 +274,7 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 			mask = field;
 		}
 		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIdx);
-		var cmp = [mask, offset];
+		var cmp = [mask, offset, fieldIdx];
 		// joints
 		joints.push(mask);
 		// keytext
@@ -280,7 +291,6 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 			// score
 			if(datatype.isConfigFieldScoreAddend(config, fieldIdx)){
 				score.push(cmp);
-				scoreFieldIdx[mask] = fieldIdx;
 			}
 			// uid
 			if(datatype.isConfigFieldUIDPrepend(config, fieldIdx)){
@@ -288,9 +298,18 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 			}
 		}
 	}
-	// sort ord.score in descending order of the Factors; put nulls as lowest (i.e. not participating)
-	score.sort(function(a,b){return (datatype.getConfigPropFieldIdxValue(config, 'factors', scoreFieldIdx[b]) || -Infinity)
-						- datatype.getConfigPropFieldIdxValue(config, 'factors', scoreFieldIdx[a]);});
+	// sort ord.score in descending order of the Factors; put nulls/0's as lowest (i.e. not participating)
+	score.sort(function(a,b){return (datatype.getConfigPropFieldIdxValue(config, 'factors', b[2]) || -Infinity)
+						- datatype.getConfigPropFieldIdxValue(config, 'factors', a[2]);});
+	// configure ordering
+	for(var i=0; i < score.length; i++){
+		order.push(score[i][2]);
+	}
+	for(var i=0; i < uid.length; i++){
+		if(order.indexOf(uid[i][2]) < 0){
+			order.push(uid[i][2]);
+		}
+	}
 	return comparison.normalizeOrd(ord);
 };
 

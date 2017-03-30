@@ -77,13 +77,14 @@ join.unNamespaceCursor = function unNamespaceJoinCursor(namespace, cursor, joint
 	var index = cursorClone.index;
 	var nspIndex = {};
 	for(var mangle in (index || {})){
-		// if there's no separator or namespace prefixes the field-name, admit field into stream's cursor
 		var mask = null;
 		if(mangle.indexOf(join.nsp_separator) < 0){
+			// if there's no separator or namespace prefixes in the field-name, admit field into stream's cursor
+			// this may put extraneous fields, but this should be okay
 			mask = mangle;
 		}else if(utils.startsWith(mangle, namespace + join.nsp_separator)){
 			mask = mangle.slice(namespace.length + join.nsp_separator.length);
-		}else{
+		}else{	// field belongs to another namespace
 			continue;
 		}
 		// fields may require mapping
@@ -234,9 +235,9 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamProps[i].attributeIdx = attrIdx;
 		if((streamProps[i].argsCopy[attrIdx]||{}).limit == null){
 			streamProps[i].argsCopy[attrIdx] = utils.shallowCopy(streamProps[i].argsCopy[attrIdx]) || {};	// make a copy
-			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = (limit == null? defaultLimit : limit);
 		}else if(streamProps[i].argsCopy[attrIdx].limit < limit){
-			streamProps[i].argsCopy[attrIdx].limit = limit || defaultLimit;
+			streamProps[i].argsCopy[attrIdx].limit = (limit == null? defaultLimit : limit);
 		}
 		streamProps[i].argsCopy.push('/*callback-place-holder*/');
 	}
@@ -270,8 +271,9 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		return {maskFld:maskFld, mangleFld:mangleFld, streamFld:streamFld};
 	};
 	var joinFields = null;
-	limit = limit || Infinity;			// NB: not to be confused with limit in <attribute>
-	if(limit <= 0){
+	if(limit == null){
+		limit = Infinity;			// NB: not to be confused with limit in <attribute>
+	}else if(limit <= 0){
 		return then(null, {code:0, data:[]});
 	}
 	var loopCount = 0;

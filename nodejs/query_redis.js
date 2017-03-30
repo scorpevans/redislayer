@@ -14,77 +14,90 @@ var collision_breaker = datatype.getCollisionBreaker();
 var redisMaxScoreFactor = datatype.getRedisMaxScoreFactor();
 var asc = command.getAscendingOrderLabel();
 var desc = command.getDescendingOrderLabel();
+var nullChar = datatype.getNullCharacter();
+var emptyChar = datatype.getEmptyCharacter();
+// these values are used to represent +/- Infinity
+var firstUnicode = datatype.getJSFirstUnicode();
+var lastUnicode = datatype.getJSLastUnicode();
+var redisMinScore = datatype.getRedisMinScore();
+var redisMaxScore = datatype.getRedisMaxScore();
 
 var label_lua_nil = '_nil';					// passing raw <nil> to lua is not exactly possible
 
 
-
-processPaddingForZsetUID = function processPaddingForZsetUID(struct, type, val){
-	// NB: it is crucial to leave NULL values untouched; '' may mean a something for callers
-	if(val != null){
-		val = val+'';
-		if(struct == 'zset' && (type == 'float' || type == 'integer')){
-			// NB: preceding zeros are significant, since in case of splits these may actually not be preceding
-			// 	in case of no prefix splits, numbers should not be preceeded by zeros
-			var wholeNumber = val.slice(0, (val+'.').indexOf('.'))
-			val = Array(wholeNumber.length).join('a') + val;	// e.g. 13.82 -> a13.82
+registerStructElement = function registerStructElement(type, struct, elem, fieldidx, key_type){
+	if(elem != null){
+		if(type == 'usual'){
+			// for 'usual' fields, append non-null values to both 'usual' ...
+			if(struct.usual == null){
+				struct.usual = [];
+			}
+			struct.usual.push(elem);
+			//  ... and append also to preceding 'branches'
+			// field-branches after current field remain unprocessed
+			for(j=0; j < fieldidx; j++){
+				if(datatype.isConfigFieldBranch(key_type, j)){
+					if(struct.branch[j] == null){
+						struct.branch[j] = [];
+					}
+					struct.branch[j].push(elem);
+				}
+			}
+		}else if(type == 'branch'){
+			// for 'branch' fields, append non-null values in 'usual' to 'branches'
+			struct.branch[fieldidx] = [elem];
+			if(struct.usual != null){
+				// unshift => the cumulative data preceed that of the current field-branch
+				[].unshift.apply(struct.branch[fieldidx], struct.usual);
+			}
 		}
 	}
-	return val;
-}
-// TODO most of the computations on configs could be cached in redislayer to reduce parse computations
-query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStorageAttributes(key, meta_cmd, index){
-	// for <xid>, distinguish between 0 and null for zrangebyscore
-	// that is xid=null would be a hint that zrangebylex should be used instead
+};
+// NB: special chars are used to encode null and empty string; however these cannot be stored in scores
+query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStorageAttributes(key, meta_cmd, index, rangeConfig){
+	// NB: rangeConfig.startValue is mostly useful for the zrange query
+	// if specified along with rangeConfig.index, update the index's value with startValue
+	// this is necessary for the correct start keytext/keysuffixes
+	if(rangeConfig && rangeConfig.startValue != null && rangeConfig.startProp in (index || {})){
+		index = utils.shallowCopy(index);			// NB: index variable is detached from rangeConfig.index
+		index[rangeConfig.startProp] = rangeConfig.startValue;
+	}
 	var usual = 'usual';
 	var branch = 'branch';
 	var keyBranches = [];
 	var mainFieldBranch = null;
-	var xid = {usual: null, branch: []};
 	var luaArgs = {usual: [], branch: []}; 
 	var keyFieldSuffixes = {usual: [], branch: []}; 
 	var uidPrefixes = {usual: [], branch: []};
 	var xidPrefixes = {usual: [], branch: []};
 	var keyConfig = datatype.getKeyConfig(key);
 	var struct = datatype.getConfigStructId(keyConfig);
-	var indexFields = Object.keys(index);
 	var fields = datatype.getConfigIndexProp(keyConfig, 'fields') || [];			// fields sorted by index
 	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
 	var offsetgroups = datatype.getConfigIndexProp(keyConfig, 'offsetgroups') || [];
+	var doneOffsetGroups = {};
 	// using the defined fields is a better idea than using the currently provided possibly-partial or even extraneous fields
 	// it uniformly treats every index argument with complete field-set, albeit some having NULL values
 	// this is safer; fields have fixed ordering and positions!
 	// for example, note that absent fields may still make an entry in keyFieldSuffixes!!
 	for(var i=0; i < fields.length; i++){
 		var field = fields[i];
-		if(!(field in index)){
-			continue;
-		}
 		var fieldIndex =  i;
 		var fieldVal = index[field];
+		var isFieldProvided = (field in (index || {}));
 		var splits = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
 		// key suffixes and branches
-		var type = usual;
 		var fieldBranch = splits[2];
 		// NB: this must be parsed even if the value of the index.$field is <null>
 		// else how do you direct/indicate choice of key (for fieldBranches) for getter queries?!
-		if(fieldBranch != null && indexFields.indexOf(fieldBranch) >= 0){	// unusual case
+		var type = usual;
+		if(fieldBranch != null){
 			type = branch;
-			keyBranches.push(fieldBranch);
+			if(fieldBranch in (index || {})){
+				keyBranches.push(fieldBranch);
+			}
 		}
 		if(datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex)){
-			// NB: empty strings are still generated/concatenated in case of NULL keySuffix-fields
-			// a distinction has to be made between empty index and empty suffix
-			// empty index => ranges start from min/max for fields, whereas empty suffix is specific
-			if(!splits[0]){
-				if((index || {})[field] == null && command.isOverRange(meta_cmd)){
-					var cmdOrder = command.getOrder(meta_cmd);
-					splits[0] = datatype.getKeyFieldBoundChain(key, field, cmdOrder);
-				}else{
-					splits[0] = '';
-				}
-			}
-			// use fieldIndex for ordering but remember there may be gaps (i.e. ['', ,'234']) to be removed
 			var offsetGroupIndex = offsetgroups[fieldIndex];
 			if(offsetGroupIndex == null){
 				offsetGroupIndex = fieldIndex;
@@ -92,153 +105,68 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 			// NB: only set once; keysuffix of other offsetgroups would be ignored!
 			// 	datatype.splitConfigFieldValue takes care of returning the keysuffix of the first non-null offsetgroup field
 			// this means once any offsetgroup field is given a value, it must be sufficient to define the keysuffix
-			if(keyFieldSuffixes[type][offsetGroupIndex] == null){
+			if(!doneOffsetGroups[offsetGroupIndex]){
+				doneOffsetGroups[offsetGroupIndex] = true;
 				var valueFieldIdx = splits[3];	// the field within the offsetgroup whose value was used
-				// FYI array format used for RHS since values are concated with others later
-				// NB: valueFieldIdx potentially breaks the ordering of fieldidx in the list
-				//	=> consumers should rely on the list's index for ordering keysuffixes
-				keyFieldSuffixes[type][offsetGroupIndex] = [{keysuffix:splits[0], fieldidx:valueFieldIdx}];
+				var val = datatype.encodeVal(splits[0], type, struct, 'keysuffix', (offsetGroupIndex != null & offsetGroupIndex >= 0));
+				var elem = {keysuffix:val, fieldidx:fieldIndex, valuefieldidx:valueFieldIdx};
+				registerStructElement(type, keyFieldSuffixes, elem, fieldIndex, keyConfig);
 			}
 		}
 		// xid and uid
+		// for <xid>, distinguish between 0 and null for zrangebyscore and zrangebylex respectively
 		if(datatype.isConfigFieldUIDPrepend(keyConfig, fieldIndex)){
-			// use fieldIndex for ordering but remember there may be gaps i.e. ['', ,'234'] to be removed
-			// in case of <null> use empty-string concats in order to prevent order mismatches
-			// for zset, prefix floats with 'a's so they maintain their sorting; see datatype.getConfigOrdering
+			// for zset, prefix floats with special-characters so they maintain their sorting; see datatype.getConfigOrdering
 			var mytype = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
-			var pad = processPaddingForZsetUID(struct, mytype, splits[1]) || '';
-			uidPrefixes[type][fieldIndex] = [{uidprefix:pad, fieldidx:fieldIndex}];
+			var pad = datatype.processPaddingForZsetUID(struct, mytype, splits[1]);
+			var val = datatype.encodeVal(pad, type, struct, 'uid', isFieldProvided);
+			var elem = {uid:val, fieldidx:fieldIndex};
+			registerStructElement(type, uidPrefixes, elem, fieldIndex, keyConfig);
 		}
 		if(struct == 'zset'){
 			if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
-				var addend = datatype.getFactorizedConfigFieldValue(keyConfig, field, splits[1]);
-				if(addend != null){
-					if(type == usual){
-						xid[type] = (xid[type] || 0) + addend;
-					}else{
-						xid[type][fieldBranch] = (xid[type][fieldBranch] || 0) + addend; 
-					}
+				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
+					var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided); 
+					var elem = {xid:val, fieldidx:fieldIndex};
+					registerStructElement(type, xidPrefixes, elem, fieldIndex, keyConfig);
 				}
 			}
-		// datatype.isConfigFieldStrictlyUIDPrepend (lexicographical member) does not really apply to non-zsets; NOT TRUE!
-		// add more constraints to fish out wrong evaluations of nulls or empty strings
-		// NULLs cannot simply be ignored too
-		// NB: keep in mind storing e.g. details of a person with NULL entries => 'firstname::28:'
-		// the <cmd> seems to be the only hint as to when to ignore <xid>, at least when NULL
 		}else if(!datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){	// i.e. definition of XID vs. UID
-			// non-zsets values/scores/xids just have to be joined
-			xidPrefixes[type][fieldIndex] = (splits[1] != null ? splits[1]+'' : '');
+			var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+			var elem = {xid:val, fieldidx:fieldIndex};
+			registerStructElement(type, xidPrefixes, elem, fieldIndex, keyConfig);
 		}
 		// NB: upsert can NOT cause changes in key/keysuffix
 		// since keyFieldSuffixes+UID are required to be complete in order to identify target
 		// => in case upsert is tried on such fields, only the non-keysuffix portion is updated
 		//	as it turns out, this fortunately prevents offsetgroups from updating keysuffixes which subsumes their contribution
 		if(utils.startsWith(command.getType(meta_cmd), 'upsert')){
+			// update if field is explicitly mentioned; else the stored value would be retained
+			// NB: when fieldBranches are mentioned, they are always updated
+			//	this is okay since the branch is essentially for the value of the fieldbranch
 			if(struct == 'zset'){
 				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
-					var outOfBounds = 1000*redisMaxScoreFactor;		// just large enough
 					var pvf = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', fieldIndex);
-					var next_pvf = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex) || outOfBounds;
-					luaArgs[type][fieldIndex] = [splits[1]||0, pvf, next_pvf];
+					var next_pvf = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex);
+					if(next_pvf == null){
+						var outOfBounds = 1000*redisMaxScoreFactor;		// just large enough
+						next_pvf = outOfBounds;
+					}
+					// NB: for Scores 0 and NULL cannot be distinguished
+					var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+					if(val == null){
+						val = label_lua_nil;
+					}
+					var elem = [val, pvf, next_pvf];
+					registerStructElement(type, luaArgs, elem, fieldIndex, keyConfig);
 				}
 			}else{
-				luaArgs[type][fieldIndex] = (splits[1] != null ? [splits[1]] : [label_lua_nil]);
-			}
-		}
-	}
-	// passover fieldIndexes once again in order to build structures
-	// use index=0 of the same structures above to compound progressive values
-	for(var i=1; i < fields.length; i++){		// i=0 is done by virtue of it being used as compound storage
-		var field = fields[i];
-		var fieldIndex = i; 
-		var fieldVal = index[field];
-		var os = offsets[fieldIndex];
-		var isBranch = datatype.isConfigFieldBranch(keyConfig, fieldIndex);
-		var type = (isBranch ? branch : usual);
-		var addend = null;
-		if(!isBranch){
-			// for 'usual' fields, append non-null values to both 'usual' ...
-			var structs = [keyFieldSuffixes, uidPrefixes, xidPrefixes];
-			var delimiters = [null, separator_detail, separator_detail];	// null delimiter => array storage instead of string
-			for(s=0; s < structs.length; s++){
-				var str = structs[s];
-				var del = delimiters[s];
-				var elem = str[type][fieldIndex];
-				if(elem != null){
-					if(del == null){
-						if(str[type][0] == null){
-							str[type][0] = [];
-						}
-						[].push.apply(str[type][0], elem);
-					}else{
-						addend = (str[usual][0] != null ? str[type][0] + del : '');
-						str[type][0] = addend + elem;
-					}
-					//  ... and append also to 'branches'
-					for(j=0; j < i; j++){
-						// go through field-branches before current field
-						// field-branches after current field remain unprocessed
-						if(datatype.isConfigFieldBranch(keyConfig, j)){
-							if(del == null){
-								if(str[branch][j] == null){
-									str[branch][j] = [];
-								}
-								[].push.apply(str[branch][j], elem);
-							}else{
-								addend = (str[branch][j] != null ? str[branch][j] + del : '');
-								str[branch][j] = addend + elem;
-							}
-						}
-					}
+				var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+				if(val == null){
+					val = label_lua_nil;
 				}
-			}
-			if(luaArgs[type][fieldIndex] != null){
-				if(luaArgs[usual][0] != null){
-					[].push.apply(luaArgs[usual][0], luaArgs[type][fieldIndex]);
-				}else{
-					luaArgs[usual][0] = luaArgs[type][fieldIndex].concat([]);
-				}
-				for(j=0; j < i; j++){
-					// go through field-branches before current field
-					// field-branches after current field remain unprocessed
-					if(datatype.isConfigFieldBranch(keyConfig, j)){
-						if(luaArgs[branch][j] != null){
-							[].push.apply(luaArgs[branch][j], luaArgs[type][fieldIndex]);
-						}else{
-							luaArgs[branch][j] = luaArgs[type][fieldIndex].concat([]);
-						}
-					}
-				}
-			}
-		}else{
-			// for 'branch' fields, append non-null values in 'usual' to 'branches'
-			var structs = [keyFieldSuffixes, uidPrefixes, xidPrefixes];
-			var delimiters = [null, separator_detail, separator_detail];
-			for(s=0; s < structs.length; s++){
-				var str = structs[s];
-				var del = delimiters[s];
-				if(str[usual][0] != null){
-					if(del == null){
-						if(str[type][fieldIndex] == null){
-							str[type][fieldIndex] = [];
-						}
-						// unshift => the cumulative data preceed that of the current field-branch
-						[].unshift.apply(str[type][fieldIndex], str[usual][0]);
-					}else{
-						addend = (str[type][fieldIndex] != null ? del + str[type][fieldIndex] : '');
-						str[type][fieldIndex] = str[usual][0] + addend;
-					}
-				}
-			}
-			if(xid[usual] != null){
-				xid[type][field] = xid[usual] + (xid[type][field] || 0);
-			}
-			if(luaArgs[usual][0] != null){
-				if(luaArgs[type][fieldIndex] == null){
-					luaArgs[type][fieldIndex] = luaArgs[usual][0].concat([]);
-				}else{
-					[].push.apply(luaArgs[type][fieldIndex], luaArgs[usual][0]);
-				} 
+				var elem = [val];
+				registerStructElement(type, luaArgs, elem, fieldIndex, keyConfig);
 			}
 		}
 	}
@@ -250,29 +178,23 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 	var storageAttr = {};
 	for(i=0; i < keyBranches.length; i++){
 		var kb = keyBranches[i];
-		var idx = datatype.getConfigFieldIdx(keyConfig, kb) || 0;	// i.e. branchIndex or compoundIndex
+		var idx = datatype.getConfigFieldIdx(keyConfig, kb);
 		var sa = {};
-		sa.keyfieldsuffixes = keyFieldSuffixes[type][idx] || [];
-		sa.luaArgs = luaArgs[type][idx];
-		sa.uid = uidPrefixes[type][idx];
-		if(struct == 'zset'){
-			sa.xid = (type == usual ? xid[type] : xid[type][kb]);
-		}else{
-			sa.xid = xidPrefixes[type][idx];
+		if(type == 'usual'){
+			sa.keyfieldsuffixes = keyFieldSuffixes.usual || [];
+			sa.luaargs = luaArgs.usual;
+			sa.uidprefixes = uidPrefixes.usual;
+			sa.xidprefixes = xidPrefixes.usual;
+		}else if(type == 'branch'){
+			// fallback on struct.usual since some branches never get to call registerStructElement
+			sa.keyfieldsuffixes = keyFieldSuffixes.branch[idx] || keyFieldSuffixes.usual || [];
+			sa.luaargs = (luaArgs.branch[idx] == null ? luaArgs.usual : luaArgs.branch[idx]);
+			sa.uidprefixes = (uidPrefixes.branch[idx] == null ? uidPrefixes.usual : uidPrefixes.branch[idx]);
+			sa.xidprefixes = (xidPrefixes.branch[idx] == null ? xidPrefixes.usual : xidPrefixes.branch[idx]);
 		}
 		storageAttr[kb] = sa;
 	}
 	return storageAttr;
-};
-
-removePaddingFromZsetUID = function removePaddingFromZsetUID(val){
-	if(val){
-		// just remove preceding a's
-		val = val.slice(1+val.lastIndexOf('a'))
-	}else{
-		val = null;
-	}
-	return val;
 };
 
 getFieldBranchFUID = function getFieldBranchFUID(fieldIndex, keyLabel, mySuffixCount, keyParts, fkeyPartIndexes, uidParts, fuidPartIndexes){
@@ -332,16 +254,17 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 			}
 		}
 	}
-
 	// if a get-command doesn't have an XID, no result should be returned
 	// this is handled specially since otherwise index={...} will be returned instead of a NULL
 	// 	since at least one field can be constructed with the input key_text/xid/uid
 	var noReturn = (utils.startsWith(command.getType(cmd), 'get') && xid == null);
 	for(var i=0; i < fields.length; i++){
+		var rescaleScoreAddend = false;
 		var field = fields[i];
 		var fieldIndex = i;
 		var type = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
 		var fieldOffset = offsets[fieldIndex];
+		var facet = null;
 		if(datatype.isConfigFieldBranch(keyConfig, fieldIndex)){
 			// NB: field-branch value itself (i.e. apart from the property) could count towards keySuffixes
 			var mySuffixCount = keySuffixCount + (datatype.isConfigFieldKeySuffix(keyConfig, fieldIndex) ? 1 : 0);
@@ -374,12 +297,14 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 				}
 			}
 			var fieldVal = uidParts[uidIndex];
-			// for zsets, remove padding a's in the case of numerics 
-			if(struct == 'zset' && (type == 'integer' || type == 'float')){
-				fieldVal = removePaddingFromZsetUID(fieldVal);
-			}
+			facet = 'uid';
+			// for zsets, remove padding special-characters in the case of numerics 
+			fieldVal = datatype.removePaddingFromZsetUID(struct, type, fieldVal);
 			index[field] = fieldVal;
 		}else if(xid != null){
+			// NB: splitting sometimes precedes the RHS value with significant zeros (e.g. [123, 00045])
+			// hence score values may have to be rescaled based on the offset
+			rescaleScoreAddend = true;
 			if(struct != 'zset'){
 				// count xid prepends across field-branches => exclude field-branch prepends
 				var xidIndex = 0;
@@ -390,12 +315,14 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 					}
 				}
 				index[field] = xidParts[xidIndex];
+				facet = 'xid';
 			}else if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 				// basic splicing of field's component from score
 				var fact = factors[fieldIndex];
 				var preFact = datatype.getConfigFieldPrefactor(keyConfig, fieldIndex);
 				var val = Math.floor((preFact ? xid % preFact : xid) / fact);
 				index[field] = val;
+				facet = 'xid';
 			}
 		}else if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 			delete index[field];	// xid is required to complete the value
@@ -410,7 +337,7 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 				// NB: critical to have addendums ordered by fieldIndex
 				var keyIndex = 0;
 				var fieldBranchCount = 0;
-				// handle offgroups
+				// handle offsetgroups
 				var offsetGroupIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'offsetgroups', fieldIndex);
 				var keySuffixOffsets = offsets;
 				var isOffsetGroup = false;
@@ -442,6 +369,20 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 					}
 				}
 				var suffix = keyParts[keyParts.length-1-keyIndex];
+				// suffix may need rescaling due to lost significant preceding zeros of score addends
+				if(rescaleScoreAddend){
+					var prefixInfoLen = fieldOffset%100;
+					var trailSuffix = suffix.slice(prefixInfoLen);
+					if(parseInt(trailSuffix || '0', 10) != 0){
+						var trailInfoLen = Math.floor(fieldOffset/100);
+						var deficit = trailInfoLen - ((index[field] || 0)+'').length;
+						if(deficit > 0){
+							suffix = suffix+(Array(deficit+1).join('0'));	// pad with significant zeros
+						}
+					}
+				}
+				suffix = datatype.decodeVal(suffix, type, struct, 'keysuffix');
+				index[field] = datatype.decodeVal(index[field], type, struct, facet)
 				index[field] =  datatype.unsplitFieldValue([suffix, index[field]], fieldOffset);
 			}else{
 				delete index[field];		// key_text is required to complete value
@@ -457,175 +398,235 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 };
 
 
-// without special operator, ranges are inclusive
-getKeyRangeMaxByProp = function getQueryKeyRangeMaxByProp(key, index, score, prop){
-	var maxScore = null;
-	var max = (index || {}).max;
-	var keyConfig = datatype.getKeyConfig(key);
-	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
-	if(score == null){
-		maxScore = '+inf';
-	}else if(prop == null || propFactor == null){
-		maxScore = score;
-	}else if(max == null){
-		maxScore = (score - (score % propFactor) + propFactor - 1);		// -1 since ranges are inclusive
+getNextCodeWord = function getNextCodeWord(word){
+	if(word){
+		return word.slice(0,-1)+String.fromCharCode(1+word.charCodeAt(word.length-1))
 	}else{
-		var preFactor = datatype.getConfigFieldPrefactor(keyConfig, propIndex);
-		var addend = (1+max) * propFactor;
-		maxScore = score - (score % (preFactor || Infinity)) + addend - 1;	// -1 since ranges are inclusive
+		return null;
 	}
-	return maxScore;
 };
-
-getKeyRangeMinByProp = function getQueryKeyRangeMinByProp(key, range_config, score, prop){
-	var min = range_config.boundValue;
-	var keyConfig = datatype.getKeyConfig(key);
-	var propIndex = datatype.getConfigPropFieldIdxValue(keyConfig, 'fields', prop);
-	var propFactor = datatype.getConfigPropFieldIdxValue(keyConfig, 'factors', propIndex);
-	if(score == null){
-		minScore = '-inf';
-	}else if(prop == null || propFactor == null){
-		minScore = score;
-	}else if(min == null){
-		minScore = score - (score % propFactor);
+getPreviousCodeWord = function getPreviousCodeWord(word){
+	if(word){
+		return word.slice(0,-1)+String.fromCharCode(-1+word.charCodeAt(word.length-1))
 	}else{
-		var preFactor = datatype.getConfigFieldPrefactor(keyConfig, propIndex);
-		var addend = min * propFactor;
-		minScore = score - (score % (preFactor || Infinity)) + addend;
+		return null;
 	}
-	return minScore;
 };
 
-getKeyRangeStartScore = function getQueryKeyRangeStartScore(range_order, key, range_config, score){
-	var startScore = null;
-	var startBound = (range_config.excludeCursor ? '(' : '');
-	if(range_order == asc){
-		startScore = getKeyRangeMinByProp(key, range_config, score, range_config.startProp);
-	}else if(range_order == desc){
-		startScore = getKeyRangeMaxByProp(key, range_config, score, range_config.startProp);
-	}
-	return startBound+startScore;
-};
-
-getKeyRangeStopScore = function getQueryKeyRangeStopScore(range_order, key, range_config, score){
-	var stopScore = null;
-	if(range_order == asc){
-		stopScore = getKeyRangeMaxByProp(key, range_config, score, range_config.stopProp);
-	}else if(range_order == desc){
-		stopScore = getKeyRangeMinByProp(key, range_config, score, range_config.stopProp);
-	}
-	return stopScore;
-};
-
-getKeyRangeStartMember = function getQueryKeyRangeStartMember(range_order, key, range_config, member){
-	var startMember = member;
-	var startProp = range_config.startProp;
-	var keyConfig = datatype.getKeyConfig(key);
-	var startPropIndex = datatype.getConfigFieldIdx(keyConfig, startProp);
-	var startBound = (range_config.excludeCursor ? '(' : '[');
-	if(member != null){
-		// stripe off from member-parts, all prop-suffixes until the startProp
-		// NB: the algorithm here assumes the index holds all props till the startProp
-		//	else ranging is not possible!
-		var offsets = 0;
-		if(startProp == null || !datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex)){
-			startPropIndex = -1;
-			offsets = Infinity;	// don't truncate in case of no startProp/startPropIndex
+// excludecursor is used instead of range_config.excludeCursor since in the case of .byscorelex it shouldn't affect score
+// hence callers must specify accordingly
+getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_config, range_config, valprefixes, valprop, keysuffixes
+						, ascExtremePosition, descExtremePosition, boundPropFlag, boundValueFlag, valuetype, excludecursor){
+	// NB: this function may be called with valprefixes (e.g. from keychains) which do not correspond to the range_config.index
+	//	=> do not make any correspondence between the two
+	if(range_config == null){
+		return (range_order == asc ? ascExtremePosition : descExtremePosition);
+	}else if(range_config[boundValueFlag] != null && range_config[boundPropFlag] == null){
+		// NB: without an index-prop, there's no config reference for processing (e.g. for keysuffix)
+		var value = range_config[boundValueFlag];
+		if(valuetype == 'score'){
+			value = (range_config.excludeCursor ? '(' : '') + value;
+		}else if(valuetype == 'member'){
+			// prepending bound operator is required by redis API for .bylex commands
+			value = (range_config.excludeCursor ? '(' : '[') + value;
 		}
-		for(var i=0; i <= startPropIndex; i++){
-			if(datatype.isConfigFieldUIDPrepend(keyConfig, i)){
-				offsets++;
+		return value;
+	}else if(range_config.index == null){
+		return (range_order == asc ? ascExtremePosition : descExtremePosition);
+	}
+	var boundProp = range_config[boundPropFlag];
+	var boundValue = range_config[boundValueFlag];
+	var boundPropIdx = datatype.getConfigFieldIdx(key_config, boundProp);
+	if(boundPropIdx == null || boundPropIdx < 0){
+		boundPropIdx = Infinity;
+	}
+	var isBoundPropProcessed = false;	// track if boundProp refers to a member of valprefixes
+	var missingFields = 0;
+	var err = 'missing fields in range definition; config:= '+datatype.getConfigId(key_config)+', before field:= ';
+	var value = null;
+	var truncated = false;			// indicates whether <value> was truncated
+	for(var i=0; i < (valprefixes || []).length; i++){
+		var elem = valprefixes[i];
+		var prefix = (value != null ? (value + separator_detail) : '');
+		if(elem[valprop] != null && missingFields > 0){
+			throw new Error(err + datatype.getConfigPropFieldIdxValue(key_config, 'fields', elem.fieldidx));
+		}else if(elem.fieldidx == boundPropIdx){
+			isBoundPropProcessed = true;
+			// NB: boundValue is raw and unprocessed, hence may resolve to an entirely different keysuffix
+			// in which case the boundPropDelimiter would have to be before and not after the boundValue
+			// 	this is equivalently implemented by descExtremePosition/ascExtremePosition
+			// 	the keychain search module would take care of ranging to other keysuffixes
+			// NB: sometimes boundValue is NULL but the range has entered a new keysuffix e.g. happens with startProp
+			if(datatype.isConfigFieldKeySuffix(key_config, boundPropIdx)){
+				// find the keysuffix corresponding to the boundProp
+				var boundKS = null;
+				var boundOSGIdx = datatype.getConfigPropFieldIdxValue(key_config, 'offsetgroups', boundPropIdx);
+				for(var j=0; j < keysuffixes.length; j++){
+					if(keysuffixes[j].fieldidx == boundPropIdx || keysuffixes[j].fieldidx == boundOSGIdx){
+						boundKS = keysuffixes[j].keysuffix;
+						break;
+					}
+				}
+				var boundIndex = utils.shallowCopy(range_config.index);
+				if(boundValue != null){
+					boundIndex[boundProp] = boundValue;
+				}
+				var splits = datatype.splitConfigFieldValue(key_config, boundIndex, boundProp);
+				var origKS = splits[0];
+				var isBefore = datatype.isKeyFieldChainWithinBound(key_config, boundPropIdx, range_order, origKS, boundKS);
+				var isAfter = datatype.isKeyFieldChainWithinBound(key_config, boundPropIdx, range_order, boundKS, origKS);
+				if(isBefore && isAfter){								// i.e. equality
+					boundValue = splits[1];
+				}else if(boundPropFlag == 'startProp' ? isBefore : isAfter){				// match everything within the prop's scope
+					if(valuetype == 'score'){
+						var boundPrefactor = datatype.getConfigFieldPrefactor(key_config, boundPropIdx);
+						var boundFactor = datatype.getConfigPropFieldIdxValue(key_config, 'factors', boundPropIdx);
+						if(boundPrefactor == null){
+							boundPrefactor = 10*redisMaxScoreFactor;
+						}
+						var maxDiff = Math.floor((boundPrefactor - boundFactor)/boundFactor);	// e.g. 999
+						if(boundPropFlag == 'startProp'){
+							boundValue = (range_order == asc ? 0 : maxDiff);		// TODO incompatible with -ve values
+						}else if(boundPropFlag == 'stopProp'){
+							boundValue = (range_order == asc ? maxDiff : 0);		// TODO incompatible with -ve values
+						}
+					}else if(valuetype == 'member'){
+						boundValue = (range_order == asc ? ascExtremePosition : descExtremePosition);
+					}
+				}else if(boundPropFlag == 'startProp' ? isAfter : isBefore){				// match nothing
+					value = (range_order == asc ? descExtremePosition : ascExtremePosition);
+					break;
+				}
+			}else{
+				boundValue = elem[valprop];
+			}
+			if(valuetype == 'score'){
+				value = value + datatype.getFactorizedConfigFieldValue(key_config, elem.fieldidx, boundValue);
+			}else if(valuetype == 'member'){
+				value = prefix + boundValue;
+			}
+		}else if(elem.fieldidx > boundPropIdx){
+			truncated = true;
+			break;
+		}else if(elem[valprop] == null){
+			missingFields++;
+		}else{
+			if(valuetype == 'score'){
+				var addend = datatype.getFactorizedConfigFieldValue(key_config, elem.fieldidx, elem[valprop]);
+				if(addend != null){			// null valprefixes should yield value=null => lexicographical ordering
+					value = value + addend;
+				}
+			}else if(valuetype == 'member'){
+				value = prefix + elem[valprop];
 			}
 		}
-		var tray = member.split(separator_detail).splice(0, offsets);
-		// increment the last character in case of descending
-		if(range_order != asc && !range_config.excludeCursor){
-			var incr = 1;
-			var lastStr = tray[tray.length-1];
-			var nextStr = lastStr.slice(0, -1)+String.fromCharCode(lastStr.charCodeAt(lastStr.length-1)+incr);
-			tray[tray.length-1] =  nextStr;
-		}
-		// terminate search string so it doesn't prefix another member which shouldn't have been in the range
-		// e.g. aa:a:...   vs.  aa:aZ:...
-		// but this should only be done in case the member-tray was truncated
-		// otherwise the resulting string would not be a prefix anymore
-		var offsetPrependsUID = datatype.getConfigIndexProp(keyConfig, 'offsetprependsuid') || [];
-		var isLastPrepend = (offsetPrependsUID.lastIndexOf(true) == startPropIndex);
-		if(startProp != null && datatype.isConfigFieldUIDPrepend(keyConfig, startPropIndex) && !isLastPrepend){
-			tray.push('');						// character preceding all others
-		}
-		startMember = tray.join(separator_detail);
 	}
-	if(range_order == asc){
-		startMember = (startMember ? startBound+startMember : '-');
-	}else if(range_order == desc){
-		startMember = (startMember ? '('+startMember : '+');		// '(' since last character was increased/excluded
-	}
-	return startMember;
-};
-
-getKeyRangeStopMember = function getQueryKeyRangeStopMember(range_order, key, range_config, member){
-	var stopMember = null;
-	var stopProp = range_config.stopProp;
-	var keyConfig = datatype.getKeyConfig(key);
-	var stopPropIndex = datatype.getConfigFieldIdx(keyConfig, stopProp);
-	if(member != null){
-		var offsets = 0;
-		if(stopProp == null || !datatype.isConfigFieldUIDPrepend(keyConfig, stopPropIndex)){
-			stopPropIndex = -1;
-			offsets = Infinity;
-		}
-		for(var i=0; i <= stopPropIndex; i++){
-			if(datatype.isConfigFieldUIDPrepend(keyConfig, i)){
-				offsets++;
+	if(value != null){
+		if(valuetype == 'score'){
+			// computations could overflow redis-score limits
+			if(value > redisMaxScore){
+				value = redisMaxScore;
+			}else if(value < redisMinScore){
+				value = redisMinScore;
+			}
+			// it would be nice not to have to use the '(' operator
+			// lua scripts could also use this output without having to remove '('
+			// but this cannot be implemented by just skipping the score value
+			// skipping the score would be wrong for .byscorelex commands
+			// since it is the uid/member value which should be skipped in this case
+			// excludecursor instead of range_config.excludeCursor is introduced to regulate this
+			if(truncated){
+				var high = 0;
+				if((boundPropFlag == 'startProp' && !excludecursor) || (boundPropFlag == 'stopProp' && excludecursor)){
+					high = (range_order == asc ? 0 : 1);
+				}else if((boundPropFlag == 'stopProp' && !excludecursor) || (boundPropFlag == 'startProp' && excludecursor)){
+					high = (range_order == asc ? 1 : 0);
+				}
+				var low = 0;
+				if((boundPropFlag == 'startProp' && range_order == asc) || (boundPropFlag == 'stopProp' && range_order != asc)){
+					low = 0;
+				}else if((boundPropFlag == 'stopProp' && range_order == asc) || (boundPropFlag == 'startProp' && range_order != asc)){
+					low = -1;
+				}
+				value = value + datatype.getFactorizedConfigFieldValue(key_config, boundPropIdx, high) + low;
+			}else{
+				if(excludecursor){
+					if(boundPropFlag == 'startProp'){
+						value = value + (range_order == asc ? 1 : -1);
+					}else if(boundPropFlag == 'stopProp'){
+						value = value + (range_order == asc ? -1 : 1);
+					}
+				}
+			}
+		}else if(valuetype == 'member'){
+			// prepending bound operator is required by redis API for .bylex commands
+			// it would have been preferable to tweak member element instead
+			// since lua scripts can't take these bound operators
+			// nonetheless tweak member, so that lua scripts just have to cut off operator
+			value = '['+value;
+			if(truncated){	// use the left and right char of the separator_detail to delimit range
+				var delimiter = '';
+				if((boundPropFlag == 'startProp' && !excludecursor) || (boundPropFlag == 'stopProp' && excludecursor)){
+					delimiter = (range_order == asc ? getPreviousCodeWord(separator_detail) : getNextCodeWord(separator_detail));
+				}else if((boundPropFlag == 'stopProp' && !excludecursor) || (boundPropFlag == 'startProp' && excludecursor)){
+					delimiter = (range_order == asc ? getNextCodeWord(separator_detail) : getPreviousCodeWord(separator_detail));
+				}
+				value = value + delimiter;
+			}else{	// just (in/de)crement last char of value in case of excludecursor
+				if(excludecursor){
+					if(boundPropFlag == 'startProp'){
+						value = (range_order == asc ? getNextCodeWord(value) : getPreviousCodeWord(value));
+					}else if(boundPropFlag == 'stopProp'){
+						value = (range_order == asc ? getPreviousCodeWord(value) : getNextCodeWord(value));
+					}
+				}
 			}
 		}
-		var tray = member.split(separator_detail).splice(0, offsets);
-		// NB: boundValue not used in getKeyRangeStartMember since index can be used to represent that
-		// NB: in case of a boundValue argument, we have to deal with a string instead of char
-		// NB: UID numerics are padded to maintain ordering
-		var struct = datatype.getConfigStructId(keyConfig);
-		var type = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', stopPropIndex);
-		var stop = processPaddingForZsetUID( struct, type, range_config.boundValue);
-		if(stop != null){
-			tray[tray.length-1] = String(stop);
-		}
-		// increment the last char of string in case of ascending order
-		if(range_order == asc){
-			var incr = 1;
-			var lastStr = tray[tray.length-1];
-			var nextStr = lastStr.slice(0, -1)+String.fromCharCode(lastStr.charCodeAt(lastStr.length-1)+incr);
-			tray[tray.length-1] =  nextStr;
-		}
-		var offsetPrependsUID = datatype.getConfigIndexProp(keyConfig, 'offsetprependsuid') || [];
-		var isLastPrepend = (offsetPrependsUID.lastIndexOf(true) == stopPropIndex);
-		if(stopProp != null && datatype.isConfigFieldUIDPrepend(keyConfig, stopPropIndex) && !isLastPrepend){
-			tray.push('');
-		}
-		stopMember = tray.join(separator_detail);
-		
 	}
-	if(range_order == asc){
-		stopMember = (stopMember ? '('+stopMember : '+');
-	}else if(range_order == desc){
-		stopMember = (stopMember ? '['+stopMember : '-');
-	}
-	return stopMember;
+	return value;
+};
+
+getKeyRangeStartScore = function getQueryKeyRangeStartScore(range_order, key_config, range_config, xidprefixes, keysuffixes, excludecursor){
+	return getKeyRangeBoundValue(range_order, key_config, range_config, xidprefixes, 'xid', keysuffixes
+					, redisMinScore, redisMaxScore, 'startProp', 'startValue', 'score', excludecursor);
+};
+
+getKeyRangeStopScore = function getQueryKeyRangeStopScore(range_order, key_config, range_config, xidprefixes, keysuffixes, excludecursor){
+	return getKeyRangeBoundValue(range_order, key_config, range_config, xidprefixes, 'xid', keysuffixes
+					, redisMaxScore, redisMinScore, 'stopProp', 'stopValue', 'score', excludecursor);
+};
+
+getKeyRangeStartMember = function getQueryKeyRangeStartMember(range_order, key_config, range_config, uidprefixes, keysuffixes, excludecursor){
+	return getKeyRangeBoundValue(range_order, key_config, range_config, uidprefixes, 'uid', keysuffixes
+					, firstUnicode, lastUnicode, 'startProp', 'startValue', 'member', excludecursor);
+};
+
+getKeyRangeStopMember = function getQueryKeyRangeStopMember(range_order, key_config, range_config, uidprefixes, keysuffixes, excludecursor){
+	return getKeyRangeBoundValue(range_order, key_config, range_config, uidprefixes, 'uid', keysuffixes
+					, lastUnicode, firstUnicode, 'stopProp', 'stopValue', 'member', excludecursor);
+	
 };
 
 
-query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attribute, field, storage_attribute){
+getKeyText = function getKeyText(key, keysuffixes, field){
+	var keyLabel = datatype.getKeyLabel(key);
+	var ks = keysuffixes.map(function(kfs){return kfs.keysuffix;});
+	var keyText = [keyLabel].concat(field != null ? [field] : [], ks).join(separator_key);
+	return keyText;
+};
+
+query_redis.getCIQA = function getCIQA(meta_cmd, keys, rangeConfig, attribute, field, storage_attribute){
 	var key = keys[0];
 	var cmd = meta_cmd;
 	var keyConfig = datatype.getKeyConfig(key);
-	var keyLabel = datatype.getKeyLabel(key);
 	var struct = datatype.getConfigStructId(keyConfig);
 	var lua = null;
-	var xid = storage_attribute.xid;
-	var uid = storage_attribute.uid;
-	var luaArgs = storage_attribute.luaArgs || [];
-	var keySuffixes = storage_attribute.keyfieldsuffixes.map(function(kfs){return kfs.keysuffix;});
+	var xidPrefixes = storage_attribute.xidprefixes || [];
+	var uidPrefixes = storage_attribute.uidprefixes || [];
+	var xid = xidPrefixes.map(function(a){return (a.xid == null ? '' : a.xid);}).join(separator_detail);		// except for zset
+	var uid = uidPrefixes.map(function(a){return (a.uid == null ? '' : a.uid);}).join(separator_detail);		// except for zset
+	var luaArgs = (storage_attribute.luaargs || []).reduce(function(a,b){return a.concat(b);}, []);
+	var keySuffixes = storage_attribute.keyfieldsuffixes;
 	var args = [];
 	var limit = (attribute || {}).limit;
 	switch(struct){
@@ -634,14 +635,16 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 			lua = 'local xid = redis.call("get", KEYS[1]);'
 				+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
 				+ 'local xidStr = "";'
-				+ 'for i=1, #xidList, 1 do'
+				+ 'local i = 0;'
+				+ 'for val in xidList do'
+				+ '    i = i + 1;'
 				+ '    if i > 1 then'
 				+ '        xidStr = xidStr.."'+separator_detail+'"'
 				+ '    end;'
 				+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
 				+ '        xidStr = xidStr..ARGV[i];'
 				+ '    else'
-				+ '        xidStr = xidStr..xidList[i];'
+				+ '        xidStr = xidStr..val;'
 				+ '    end;'
 				+ 'end;'
 				+ 'if xid ~= xidStr then'
@@ -651,10 +654,10 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 				+ 'end;';
 		}else{
 			if(command.requiresXID(cmd)){
-				args.unshift(xid || '');
+				args.unshift(xid == null ? '' : xid);
 			}
 			if(command.requiresUID(cmd)){
-				args.unshift(uid || '');
+				args.unshift(uid == null ? '' : uid);
 			}
 		}
 		break;
@@ -664,14 +667,16 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 			lua = 'local xid = redis.call("hget", KEYS[1], ARGV[1]);'
 				+ 'local xidList = string.gmatch(xid'+separator_detail+', "([^'+separator_detail+']+)'+separator_detail+'");'
 				+ 'local xidStr = "";'
-				+ 'for i=2, #xidList, 1 do'				// ARGV[1] holds UID
-				+ '    if i > 1 then'
+				+ 'local i = 1;'				// ARGV[1] holds UID; to be skipped
+				+ 'for val in xidList do'
+				+ '    i = i + 1;'
+				+ '    if i > 2 then'
 				+ '        xidStr = xidStr.."'+separator_detail+'"'
 				+ '    end;'
 				+ '    if ARGV[i] ~= "'+label_lua_nil+'" then'
 				+ '        xidStr = xidStr..ARGV[i];'
 				+ '    else'
-				+ '        xidStr = xidStr..xidList[i];'
+				+ '        xidStr = xidStr..val;'
 				+ '    end;'
 				+ 'end;'
 				+ 'if xid ~= xidStr then'
@@ -682,20 +687,27 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 			luaArgs.unshift(uid);
 		}else{
 			if(command.requiresXID(cmd)){
-				args.unshift(xid || '');
+				args.unshift(xid == null ? '' : xid);
 			}
 			if(command.requiresUID(cmd)){
-				args.unshift(uid || '');
+				args.unshift(uid == null ? '' : uid);
 			}
 		}
 		break;
 	case 'zset':
-		var rangeOrder = command.getOrder(cmd) || asc;
 		// decide between the different type of ranges
 		if(command.getType(cmd) == 'rangez' || command.getType(cmd) == 'delrangez' || command.getType(cmd) == 'countz'){
-			cmd = command.getMode(cmd)[datatype.getZRangeSuffix(keyConfig, index, args, xid, uid)];
+			cmd = command.getMode(cmd)[datatype.getZRangeSuffix(keyConfig, rangeConfig, xidPrefixes, uidPrefixes)];
 		}
-		if(utils.startsWith(command.getType(cmd), 'upsert')){
+		xid = (xidPrefixes || []).reduce(function(a,b){
+						return (a + datatype.getFactorizedConfigFieldValue(keyConfig, b.fieldidx, b.xid));
+					}, 0);
+		uid = (uidPrefixes || []).reduce(function(a,b){
+						return ((a == null ? '' : a+separator_detail)+datatype.encodeVal(b.uid, null, 'zset', 'uid', true));
+					}, null);
+		var cmdOrder = command.getOrder(cmd) || asc;
+		var cmdType = command.getType(cmd);
+		if(utils.startsWith(cmdType, 'upsert')){
 			lua = ' local score = redis.call("zscore", KEYS[1], ARGV[1]);'
 				+ 'if score == nil then'
 				+ '    score = 0;'
@@ -713,108 +725,154 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 				+ '    return 0;'
 				+ 'end;';
 			luaArgs.unshift(uid);
-		}else if(utils.startsWith(command.getType(cmd), 'rankbyscorelex')){
-			// NB: a partial-score may be present so score==null is false
-			// .bylex requires args so when missing => zcard
-			// .byscore should also have args together with the score
-			if(/*score == null &&*/ uid == null){
-				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
-			}else{
-				var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
-				if(startScore == Infinity || startScore == -Infinity){
-					startScore = null;
-				}
-				var scorerank = {}; scorerank[asc] = '"zrevrank"'; scorerank[desc] = '"zrevrank"';
-				lua = ' local startScore = ARGV[1];'
-					+ 'local member = ARGV[2];'
-					+ 'local score = nil;'
-					+ 'local rank = nil;'
-					+ 'if startScore ~= "'+label_lua_nil+'" then'				// verify unchanged score-member
-					+ '    score = redis.call("zscore", KEYS[1], member);'			// check score tally first
-					+ '    if score == startScore then'					// then rank can be set
-					+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-					+ '    else'
-					+ '        member = member.."'+collision_breaker+'";'
-					+ '        score = startScore;'
-					+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-					+ '        rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'
-					+ '        if count > 0 then'
-					+ '            redis.call("zrem", KEYS[1], member);'
-					+ '        end;'
-					+ '    end;'
-					+ 'else'
-					+ '    rank = redis.call('+scorerank[command.getOrder(cmd)]+', KEYS[1], member);'	//no score to seek with
-					+ 'end;'
-					+ 'return rank;'
-				luaArgs.unshift(uid);
-				luaArgs.unshift(startScore || label_lua_nil);
-			}
-		}else if(utils.startsWith(command.getType(cmd), 'rangebyscorelex')){
-			// FYI: zrank and zrevrank are symmetric so a single code works!
-			// NB: redis excluding/bound operator is not required/allowed here
-			// so [member] argument can be tweaked for the desired result
-			// NB: if startScore must be used, range [prop] must be provided
-			var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
-			if(startScore == Infinity || startScore == -Infinity){
-				startScore = null;
-			}
-			// TODO rewrite lua scripts not to use normal ranging functions i.e. getKeyRangeStartScore
-			// 	for now hack around example.js issue
-			if(startScore && startScore[0] == '('){
-				startScore = parseInt(startScore.slice(1));
-			}
-			//var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
-			// TODO add countbyscorelex; //TODO implement stopScore
-			var zrank = {}; zrank[asc] = '"zrank"'; zrank[desc] ='"zrevrank"';
-			var zrange = {}; zrange[asc] = '"zrange"'; zrange[desc] ='"zrevrange"';
-			var zlimit = {}; zlimit[asc] = '-1'; zlimit[desc] = '0';
-			lua = ' local rank = nil;'
-				+ 'local startScore = ARGV[1];'
+		}else if(utils.startsWith(cmdType, 'rankbyscorelex')){
+			// NB: unlike the ranging variants, rankbyscorelex is an entirely different command
+			// it is as-such not resolved but rather specified by the caller
+			var scorerank = {}; scorerank[asc] = '"zrevrank"'; scorerank[desc] = '"zrevrank"';
+			lua = ' local startScore = ARGV[1];'
 				+ 'local member = ARGV[2];'
 				+ 'local score = nil;'
-				+ 'if startScore ~= "'+label_lua_nil+'" then'						// verify unchanged score-member
-				+ '    score = redis.call("zscore", KEYS[1], member);'					// check score tally first
-				+ '    if score == startScore then'							// then rank can be set
-				+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'
-				+ '        rank = rank + '+(startScore && startScore[0] == '(' ? 1 : 0)+';'
+				+ 'local rank = nil;'
+				+ 'if startScore ~= "'+label_lua_nil+'" then'					// verify unchanged score-member
+				+ '    score = redis.call("zscore", KEYS[1], member);'				// check score tally first
+				+ '    if score == startScore then'						// then rank can be set
+				+ '        rank = redis.call('+scorerank[cmdOrder]+', KEYS[1], member);'
 				+ '    else'
 				+ '        member = member.."'+collision_breaker+'";'
 				+ '        score = startScore;'
 				+ '        local count = redis.call("zadd", KEYS[1], "NX", score, member);'
-				+ '        rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'	// infer the previous position
+				+ '        rank = redis.call('+scorerank[cmdOrder]+', KEYS[1], member);'
 				+ '        if count > 0 then'
-				+ '             redis.call("zrem", KEYS[1], member);'
+				+ '            redis.call("zrem", KEYS[1], member);'
 				+ '        end;'
 				+ '    end;'
 				+ 'else'
-				+ '    rank = redis.call('+zrank[command.getOrder(cmd)]+', KEYS[1], member);'		// no score to seek with
+				+ '    rank = redis.call('+scorerank[cmdOrder]+', KEYS[1], member);'		//no score to seek with
 				+ 'end;'
-				+ 'if rank ~= nil then'
-				+ '    return redis.call('+zrange[command.getOrder(cmd)]+', KEYS[1], rank, '
-					+ (limit != null ? 'rank+'+limit+'-1' : zlimit[command.getOrder(cmd)])
-					+ (attribute.withscores ? ', "withscores");' : ');')
+				+ 'return rank;'
+			var startScore = getKeyRangeStartScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, false);
+			var scoreMap = {null:0, '-inf':redisMinScore, '+inf':redisMaxScore};			// zlex has score=0
+			if(startScore && startScore[0] == '('){
+				startScore = parseFloat(startScore.slice(1), 10);
+			}
+			startScore = scoreMap[startScore] || startScore;
+			var startMember = getKeyRangeStartMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
+			var front = (cmdOrder == asc ? firstUnicode : lastUnicode);				// if null => first member of given score
+			var memberMap = {null:front, '-':firstUnicode, '+':lastUnicode};
+			if(startMember && startMember[0] == '['){
+				startMember = startMember.slice(1);
+			}
+			startMember = memberMap[startMember] || startMember;
+			luaArgs.unshift(startMember);
+			luaArgs.unshift(startScore);
+		}else if(utils.startsWith(cmdType, 'rangebyscorelex')
+				|| utils.startsWith(cmdType, 'countbyscorelex')){
+			// NB: in contrast to .rankbyscorelex, such range commands are resolved depending on the storage structure
+			//	=> hence the caller is normally not specifying the type of range to be used; defaults should be chosen carefully
+			// FYI: zrank and zrevrank are symmetric so a single code works!
+			var zrank = {}; zrank[asc] = '"zrank"'; zrank[desc] ='"zrevrank"';
+			var zrange = {}; zrange[asc] = '"zrange"'; zrange[desc] ='"zrevrange"';
+			var zlimit = {}; zlimit[asc] = '-1'; zlimit[desc] = '0';
+			lua = ' local startRank = nil;'
+				+ 'local stopRank = nil;'
+				+ 'local startScore = ARGV[1];'
+				+ 'local startMember = ARGV[2];'
+				+ 'local stopScore = ARGV[3];'
+				+ 'local stopMember = ARGV[4];'
+				+ 'local score = nil;'
+				+ 'if startScore ~= "'+label_lua_nil+'" then'					// verify unchanged score-member
+				+ '    score = redis.call("zscore", KEYS[1], startMember);'			// check score tally first
+				+ '    if score == startScore then'						// then rank can be set
+				+ '        startRank = redis.call('+zrank[cmdOrder]+', KEYS[1], startMember);'
+				+ '    else'
+				+ '        startMember = startMember.."'+collision_breaker+'";'
+				+ '        local count = redis.call("zadd", KEYS[1], "NX", startScore, startMember);'
+				+ '        startRank = redis.call('+zrank[cmdOrder]+', KEYS[1], startMember);'	// infer the previous position
+				+ '        if count > 0 then'
+				+ '             redis.call("zrem", KEYS[1], startMember);'
+				+ '        end;'
+				+ '    end;'
 				+ 'else'
-				+ '    return {};'
+				+ '    startRank = redis.call('+zrank[cmdOrder]+', KEYS[1], startMember);'	// no score to seek with
 				+ 'end;'
-			luaArgs.unshift(uid || label_lua_nil);
-			luaArgs.unshift(startScore || label_lua_nil);
-		}else if(utils.startsWith(command.getType(cmd), 'countbylex') || utils.startsWith(command.getType(cmd), 'rangebylex')
-				|| utils.startsWith(command.getType(cmd), 'delrangebylex')){
-			if(utils.startsWith(command.getType(cmd), 'countbylex') && uid == null){
+				+ 'if stopScore ~= "'+label_lua_nil+'" then'					// verify unchanged score-member
+				+ '    score = redis.call("zscore", KEYS[1], stopMember);'			// check score tally first
+				+ '    if score == stopScore then'						// then rank can be set
+				+ '        stopRank = redis.call('+zrank[cmdOrder]+', KEYS[1], stopMember);'
+				+ '    else'
+				+ '        stopMember = stopMember.."'+collision_breaker+'";'
+				+ '        local count = redis.call("zadd", KEYS[1], "NX", stopScore, stopMember);'
+				+ '        stopRank = redis.call('+zrank[cmdOrder]+', KEYS[1], stopMember);'	// infer the previous position
+				+ '        if count > 0 then'
+				+ '             redis.call("zrem", KEYS[1], stopMember);'
+				+ '        end;'
+				+ '    end;'
+				+ 'else'
+				+ '    stopRank = redis.call('+zrank[cmdOrder]+', KEYS[1], stopMember);'	// no score to seek with
+				+ 'end;'
+				+ 'if startRank ~= nil and stopRank ~= nil then'
+				+ '    if '+(utils.startsWith(cmdType, 'rangebyscorelex') ? 'false' : 'true')+' then'
+				+ '        return math.max(0, stopRank-startRank+1);'
+				+ '    else'
+				+ '        return redis.call('+zrange[cmdOrder]+', KEYS[1], startRank, '
+						+ (limit != null ? 'math.min(startRank+'+limit+'-1, stopRank)' : 'stopRank')
+						+ (attribute.withscores ? ', "withscores");' : ');')
+				+ '    end;'
+				+ 'else'
+				+ '    return '+(utils.startsWith(cmdType, 'rangebyscorelex') ? '{}' : '0')+';'
+				+ 'end;'
+			var startScore = getKeyRangeStartScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, false);
+			// NB: in contract to rankbyscorelex, ranging would resolve to the .bylex variant in case of lexicographical order
+			//  => null-score should not be resolved to 0 or any value
+			var scoreMap = {null:label_lua_nil, '-inf':redisMinScore, '+inf':redisMaxScore};
+			if(startScore && startScore[0] == '('){
+				startScore = parseFloat(startScore.slice(1), 10);
+			}
+			startScore = scoreMap[startScore] || startScore;
+			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, null);
+			if(stopScore && stopScore[0] == '('){
+				stopScore = parseFloat(stopScore.slice(1), 10);
+			}
+			stopScore = scoreMap[stopScore] || stopScore;
+			var startMember = getKeyRangeStartMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
+			var front = (cmdOrder == asc ? firstUnicode : lastUnicode);				// if null => first member of given score
+			var memberMap = {null:front, '-':firstUnicode, '+':lastUnicode};
+			if(startMember && startMember[0] == '['){
+				startMember = startMember.slice(1);
+			}
+			startMember = memberMap[startMember] || startMember;
+			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, null);
+			if(stopMember && stopMember[0] == '['){
+				stopMember = stopMember.slice(1);
+			}
+			stopMember = memberMap[stopMember] || stopMember;
+			luaArgs.unshift(stopMember);
+			luaArgs.unshift(stopScore);
+			luaArgs.unshift(startMember);
+			luaArgs.unshift(startScore);
+		}else if(utils.startsWith(cmdType, 'countbylex')
+				|| utils.startsWith(cmdType, 'rangebylex')
+				|| utils.startsWith(cmdType, 'delrangebylex')){
+			var negInf = (cmdOrder == asc ? '-' : '+');
+			var posInf = (cmdOrder == asc ? '+' : '-');
+			var startMember = getKeyRangeStartMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
+			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, null);
+			if(utils.startsWith(cmdType, 'countbylex') && startMember == negInf && stopMember == posInf){
 				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
 			}else{
-				var startMember = getKeyRangeStartMember(rangeOrder, key, rangeConfig, uid);
-				var stopMember = getKeyRangeStopMember(rangeOrder, key, rangeConfig, uid);
 				args.unshift(stopMember);
 				args.unshift(startMember);
 			}
-		}else if(utils.startsWith(command.getType(cmd), 'countbyscore') || utils.startsWith(command.getType(cmd), 'rangebyscore')
-				|| utils.startsWith(command.getType(cmd), 'delrangebyscore')){
-			if(utils.startsWith(command.getType(cmd), 'countbyscore') && (xid == null || xid == '')){
+		}else if(utils.startsWith(cmdType, 'countbyscore')
+				|| utils.startsWith(cmdType, 'rangebyscore')
+				|| utils.startsWith(cmdType, 'delrangebyscore')){
+			var negInf = (cmdOrder == asc ? '-inf' : '+inf');
+			var posInf = (cmdOrder == asc ? '+inf' : '-inf');
+			var startScore = getKeyRangeStartScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, rangeConfig.excludeCursor);
+			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, null);
+			if(utils.startsWith(cmdType, 'countbyscore') && startScore == negInf && stopScore == posInf){
 				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
 			}else{
-				var startScore = getKeyRangeStartScore(rangeOrder, key, rangeConfig, xid);
-				var stopScore = getKeyRangeStopScore(rangeOrder, key, rangeConfig, xid);
 				args.unshift(stopScore);
 				args.unshift(startScore);
 			}
@@ -823,14 +881,14 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, index, rangeConfig, attri
 				args.unshift(uid || '');
 			}
 			if(command.requiresXID(cmd)){
-				args.unshift(xid || 0);		// || 0 ... typically for zset.lex
+				args.unshift(xid || 0);
 			}
 		}
 		break;
 	default:
 		throw new Error('FATAL: query.query: unknown keytype!!');
 	}
-	var keyText = keyLabel+(field != null ? separator_key+field : '')+(keySuffixes != null ? separator_key+keySuffixes : '');
+	var keyText = getKeyText(key, keySuffixes, field);
 	if((luaArgs || []).length > 0 && (utils.startsWith(command.getType(cmd), 'upsert')
 		|| utils.startsWith(command.getType(cmd), 'rangebyscorelex') || utils.startsWith(command.getType(cmd), 'rankbyscorelex'))){
 		luaArgs.unshift(keyText);

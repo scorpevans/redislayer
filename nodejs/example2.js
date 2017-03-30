@@ -1,3 +1,11 @@
+
+// USAGE: run this script for the first time to insert sample data, then change the value mycase variable to perform search
+// WARNING: this example would create keys of the form "redislayer:example:*" in your redis database
+//      of course you can easily delete these keys with the linux commands:
+//      - redis-cli -p 6379 keys "redislayer:example:*" | xargs redis-cli -p 6379 del 
+var mycase = 'insert';	// NB: change this value after first run!!!
+
+
 var async = require('async');
 var redisDB = require('redis');
 var rl = require('./redislayer');
@@ -11,12 +19,12 @@ var clist = [{
 	label: 'redis6379',
 	type: 'redis',
 	role:{
-		master: {proxy: redisDB.createClient(port=6379)},
+		master: {proxy: function(){return redisDB.createClient(port=6379)}},
 	}
 }];
 
 rl.loadClusterList({clist:clist});
-rl.setDefaultClusterLabel('redis6379');
+rl.setDefaultClusterByLabel('redis6379');
 
 // storage info
 var hash = rl.getStruct().hash.getId();
@@ -46,7 +54,7 @@ var dtree = {
 			id: 'fieldindex',
 			index: {
 				fields: ['prefix', 'id'],
-				types: ['text', 'integer'],
+				types: ['text', 'integer'],		// (NB: phone will be ordered as a string!)
 				offsetprependsuid: [true, true],
 			},
 			keys: [{
@@ -112,8 +120,6 @@ var createContact = function(data_object, then){
 };
 
 
-var mycase = 'insert';	// NB: change this value after first run!!!
-
 if(mycase == 'insert'){
 	// insert some data for testing
 	var names = ['foOd', 'foobar', 'bar', 'bARtender', 'fOOnami', 'tom', 'dick', 'harry', 'john', 'paul'];
@@ -137,6 +143,7 @@ if(mycase == 'insert'){
 		createContact(index, callback);
 	}, function(err){
 		console.log(err);
+		console.log('DONE!');
 	});
 }else{	// search
 	// rangeConfigs queries to fetch name, city, and phone
@@ -210,6 +217,7 @@ if(mycase == 'insert'){
 				}else{
 					console.log(result.data);
 				}
+				console.log('DONE!');
 			});
 			// in order to fetch next set of results,
 			// construct a range with last element of results,
