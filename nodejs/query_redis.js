@@ -227,7 +227,7 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 	var factors = datatype.getConfigIndexProp(keyConfig, 'factors') || [];
 	var offsets = datatype.getConfigIndexProp(keyConfig, 'offsets') || [];
 	var keyParts = key_text.split(separator_key);
-	var uidParts = (uid != null ? String(uid).split(separator_detail) : []);
+	var uidParts = (uid != null ? uid.split(separator_detail) : []);
 	var xidParts = (xid != null ? String(xid).split(separator_detail) : []);
 	// TODO this caching should be done once onload of configs
 	// make cache of info to be used

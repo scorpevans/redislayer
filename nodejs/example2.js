@@ -155,7 +155,7 @@ if(mycase == 'insert'){
 	var cityRange = new rl.rangeConfig(index);
 	cityRange.stopProp = 'prefix';
 
-	index = {prefix:'12'};						// phone search
+	index = {prefix:'123'};						// phone search
 	var phoneRange = new rl.rangeConfig(index);
 	phoneRange.stopProp = 'prefix';
 	

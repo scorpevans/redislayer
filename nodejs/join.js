@@ -173,29 +173,14 @@ createJoinOrd = function createJoinOrd(joinType, joint, streamIndexes, streamPro
 		streamJointMangles[str] = {};
 		var namespace = streamConfigs[str].namespace;
 		ord = mergeOrds(ord, myord, namespace, streamJointMangles[str], str);
-		// check that ords of all streamConfigs are in harmony
+		// check that ords of all streamConfigs are comparable
 		if(ords.length > 1){
-			// this check is based on a normalized ord i.e. comparison.normalizeOrd
 			var prevOrd = ords[ords.length-2];
-			var k1 = comparison.getOrdProp(myord, 'keytext');
-			var s1 = comparison.getOrdProp(myord, 'score');
-			var u1 = comparison.getOrdProp(myord, 'uid');
-			var k2 = comparison.getOrdProp(prevOrd, 'keytext');
-			var s2 = comparison.getOrdProp(prevOrd, 'score');
-			var u2 = comparison.getOrdProp(prevOrd, 'uid');
-			var isCongruent = (k1.length == k2.length && s1.length == s2.length && u1.length == u2.length);
-			for(var k=0; isCongruent && k < k1.length; k++){
-				if(k1[k][0] != k2[k][0] || k1[k][1] != k2[k][1]){
-					isCongruent = false;
-				}
-			}
-			for(var k=0; isCongruent && k < s1.length; k++){
-				if(s1[k][0] != s2[k][0] || s1[k][1] != s2[k][1]){
-					isCongruent = false;
-				}
-			}
-			for(var k=0; isCongruent && k < u1.length; k++){
-				if(u1[k][0] != u2[k][0] || u1[k][1] != u2[k][1]){
+			var fo1 = comparison.getOrdProp(myord, 'order');
+			var fo2 = comparison.getOrdProp(prevOrd, 'order');
+			var isCongruent = (fo1.length == fo2.length);
+			for(var k=0; (isCongruent && k < fo1.length); k++){
+				if(fo1[k].mask != fo2[k].mask){
 					isCongruent = false;
 				}
 			}

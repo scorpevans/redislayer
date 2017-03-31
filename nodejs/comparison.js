@@ -186,39 +186,6 @@ comparison.resetOrdMasks = function resetComparisonOrdMasks(ord){
 	}
 };
 
-// TODO reprecate; see ord.order
-comparison.normalizeOrd = function normalizeComparisonOrd(ord){
-      	// the ord should be normalized so seemingly different keys can be seen to have the same comparison
-	// this also reduces unnecessary comparisons
-	// merge the edges of the 3 ordParts
-	var keytext = comparison.getOrdProp(ord, 'keytext');
-	var score = comparison.getOrdProp(ord, 'score');
-	var uid = comparison.getOrdProp(ord, 'uid');
-	var firstScoreProp = (score[0] || [])[0];
-	var lastKeytextProp = (keytext[keytext.length-1] || [])[0];
-	// the consecutive occurence of a prop makes it <full>; no offsetting required
-	// the first occurence must be the keysuffix
-	// if lastKeytextProp is null, push firstScoreProp into keytext i.e. normalize
-	//	i.e. there's no suffix, hence firstScoreProp must be complete without offset
-	// if lastKeytextProp == firstScoreProp, again firstScoreProp must be complete without offset
-	if(firstScoreProp != null && (lastKeytextProp == null || firstScoreProp == lastKeytextProp)){
-		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
-		keytext[idx] = [lastKeytextProp || firstScoreProp, null];	// no offset now => complete value
-		score.splice(0,1);
-		lastKeytextProp = keytext[keytext.length-1][0];			// update
-	}
-	var lastScoreProp = (score[score.length-1] || [])[0];
-	var firstUIDProp = (uid[0] || [])[0];
-	if(firstUIDProp != null && firstUIDProp == lastScoreProp){
-		uid.splice(0, 1);						// i.e. entry is represented in score
-	}else if(firstUIDProp != null && lastScoreProp == null && (lastKeytextProp == null || firstUIDProp == lastKeytextProp)){
-		var idx = (keytext.length == 0 ? 0 : keytext.length-1);
-		keytext[idx] = [lastKeytextProp || firstUIDProp, null];			// no offset now => complete value
-		uid.splice(0,1);
-	}
-	return ord;
-};
-
 /*
  return an ordering scheme (ord) which tells how the objects stored on a key are ordered
  the ord should be normalized so seemingly different keys can be seen to have the same comparison
@@ -303,29 +270,26 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 						- datatype.getConfigPropFieldIdxValue(config, 'factors', a[2]);});
 	// configure ordering
 	for(var i=0; i < score.length; i++){
-		order.push(score[i][2]);
+		order.push({mask:score[i][0], fieldidx:score[i][2]});
 	}
 	for(var i=0; i < uid.length; i++){
 		if(order.indexOf(uid[i][2]) < 0){
-			order.push(uid[i][2]);
+			order.push({mask:uid[i][0], fieldidx:uid[i][2]});
 		}
 	}
-	return comparison.normalizeOrd(ord);
+	return ord;
 };
 
-var numeric = ['integer', 'float'];
 comparison.getMaskFieldMangle = function getComparisonMangleMaskField(fieldmask, mask, stream_map){
 	var maskField = comparison.getMaskField(fieldmask, mask);
 	return ((stream_map || {})[maskField] || maskField);
 };
+var numeric = ['integer', 'float'];
 comparison.getComparison = function getComparison(order, ord, index, ref, index_fieldmask, ref_fieldmask, index_mangle, ref_mangle){
 	order = order || datatype.getAscendingOrderLabel();
-	// check keytext
-	var keytext = comparison.getOrdProp(ord, 'keytext');
-	for(var i=0; i < keytext.length; i++){
-		var mask = keytext[i][0];
-		var offset = keytext[i][1];
-		// indexes may have different translations of ord masks
+	var fieldOrder = comparison.getOrdProp(ord, 'order');
+	for(var i=0; i < fieldOrder.length; i++){
+		var mask = fieldOrder[i].mask;
 		var indexOrdMask = comparison.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
 		var indexConfig = comparison.getOrdMaskConfig(ord, indexOrdMask);
 		var indexField = comparison.getOrdMaskField(ord, indexOrdMask);
@@ -341,134 +305,25 @@ comparison.getComparison = function getComparison(order, ord, index, ref, index_
 		if(refConfig == null || refField == null || !(refProp in ref)){
 			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
 		}
-		// normalization of ord can cause masks to be pushed to the keytext
-		// if offset=null in ord, use the full value
 		var indexVal = index[indexProp];
 		var refVal = ref[refProp];
-		if(offset != null){
-			var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
-			var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
-			var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
-			var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
-			// before using index/ref within functions, translate mangled fields back to config-fields
-			var primitiveIndex = {};
-			primitiveIndex[indexField] = index[indexProp];
-			var primitiveRef = {};
-			primitiveRef[refField] = ref[refProp];
-			indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[0];
-			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[0];
-			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
-				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-				refVal = (refVal != null && refVal != '' ? parseFloat(refVal, 10) : -Infinity);
-			}else{
-				indexVal = (indexVal != null ? ''+indexVal : '');
-				refVal = (refVal != null ? ''+refVal : '');
-			}
-		}
-		if(indexVal < refVal){
-			return (order == asc ? '<' : '>');
-		}else if(indexVal > refVal){
-			return (order == asc ? '>' : '<');
-		}else if(indexVal != refVal){
-			utils.logError('comparison.getComparison, keytext, '+keytext+', '+indexVal+', '+refVal, 'FATAL');
-			return null;
-		}
-	}
-	// check score
-	var score = comparison.getOrdProp(ord, 'score');
-	for(var i=0; i < score.length; i++){
-		var mask = score[i][0];
-		var offset = score[i][1];
-		// indexes may have different translations of ord masks
-		var indexOrdMask = comparison.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
-		var indexConfig = comparison.getOrdMaskConfig(ord, indexOrdMask);
-		var indexField = comparison.getOrdMaskField(ord, indexOrdMask);
-		var indexProp = comparison.getOrdMaskProp(ord, indexOrdMask);
-		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
-		if(indexConfig == null || indexField == null || !(indexProp in index)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
-		}
-		var refOrdMask = comparison.getMaskFieldMangle(ref_fieldmask, mask, ref_mangle);
-		var refConfig = comparison.getOrdMaskConfig(ord, refOrdMask);
-		var refField = comparison.getOrdMaskField(ord, refOrdMask);
-		var refProp = comparison.getOrdMaskProp(ord, refOrdMask);
-		if(refConfig == null || refField == null || !(refProp in ref)){
-			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
-		}
 		var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
 		var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
-		var indexFieldFactor = datatype.getConfigPropFieldIdxValue(indexConfig, 'factors', indexFieldIdx);
-		var refFieldFactor = datatype.getConfigPropFieldIdxValue(refConfig, 'factors', refFieldIdx);
-		var indexVal = (indexFieldFactor || 0 ) * index[indexProp];
-		var refVal = (refFieldFactor || 0 ) * ref[refProp];
-		if(offset != null){
-			// before using index/ref within functions, translate mangled fields back to config-fields
-			var primitiveIndex = {};
-			primitiveIndex[indexField] = index[indexProp];
-			var primitiveRef = {};
-			primitiveRef[refField] = ref[refProp];
-			indexVal = (indexFieldFactor || 0) * (datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1] || 0);
-			refVal = (refFieldFactor || 0) * (datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1] || 0);
+		var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
+		var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
+		if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
+			indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);	// -Infinity => nulls first
+			refVal = (refVal != null && refVal != '' ? parseFloat(refVal, 10) : -Infinity);
+		}else{
+			indexVal = (indexVal != null ? ''+indexVal : '');
+			refVal = (refVal != null ? ''+refVal : '');
 		}
 		if(indexVal < refVal){
 			return (order == asc ? '<' : '>');
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('comparison.getComparison, score, '+score+', '+indexVal+', '+refVal, 'FATAL');
-			return null;
-		}
-	}
-	// check uid
-	var uid = comparison.getOrdProp(ord, 'uid');
-	for(var i=0; i < uid.length; i++){
-		var mask = uid[i][0];
-		var offset = uid[i][1];
-		// indexes may have different translations of ord masks
-		var indexOrdMask = comparison.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
-		var indexConfig = comparison.getOrdMaskConfig(ord, indexOrdMask);
-		var indexField = comparison.getOrdMaskField(ord, indexOrdMask);
-		var indexProp = comparison.getOrdMaskProp(ord, indexOrdMask);
-		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
-		if(indexConfig == null || indexField == null || !(indexProp in index)){
-			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
-		}
-		var refOrdMask = comparison.getMaskFieldMangle(ref_fieldmask, mask, ref_mangle);
-		var refConfig = comparison.getOrdMaskConfig(ord, refOrdMask);
-		var refField = comparison.getOrdMaskField(ord, refOrdMask);
-		var refProp = comparison.getOrdMaskProp(ord, refOrdMask);
-		if(refConfig == null || refField == null || !(refProp in ref)){
-			throw new Error('missing ref-mask-field or ref-mask-config (for ['+refOrdMask+']) or ref-field (for ['+refProp+']).');
-		}
-		// NB: integers stored in UID-strings are prefixed in a way such that they are still correctly ordered
-		var indexVal = index[indexProp];
-		var refVal = ref[refProp];
-		if(offset != null){
-			var indexFieldIdx = datatype.getConfigFieldIdx(indexConfig, indexField);
-			var refFieldIdx = datatype.getConfigFieldIdx(refConfig, refField);
-			var indexFieldType = datatype.getConfigPropFieldIdxValue(indexConfig, 'types', indexFieldIdx);
-			var refFieldType = datatype.getConfigPropFieldIdxValue(refConfig, 'types', refFieldIdx);
-			// before using index/ref within functions, translate mangled fields back to config-fields
-			var primitiveIndex = {};
-			primitiveIndex[indexField] = index[indexProp];
-			var primitiveRef = {};
-			primitiveRef[refField] = ref[refProp];
-			indexVal = datatype.splitConfigFieldValue(indexConfig, primitiveIndex, indexField)[1];
-			refVal = datatype.splitConfigFieldValue(refConfig, primitiveRef, refField)[1];
-			if(numeric.indexOf(indexFieldType) >= 0 && numeric.indexOf(refFieldType) >= 0){
-				indexVal = (indexVal != null && indexVal != '' ? parseFloat(indexVal, 10) : -Infinity);
-				refVal = (refVal != null && refVal != '' ? parseFloat(refVal, 10) : -Infinity);
-			}else{
-				indexVal = (indexVal != null ? ''+indexVal : '');
-				refVal = (refVal != null ? ''+refVal : '');
-			}
-		}
-		if(indexVal < refVal){
-			return (order == asc ? '<' : '>');
-	       	}else if(indexVal > refVal){
-			return (order == asc ? '>' : '<');
-		}else if(indexVal != refVal){
-			utils.logError('comparison.getComparison, uid, '+uid+', '+indexVal+', '+refVal, 'FATAL');
+			utils.logError('comparison.getComparison, '+indexVal+', '+refVal, 'FATAL');
 			return null;
 		}
 	}

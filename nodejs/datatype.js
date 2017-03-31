@@ -1041,7 +1041,7 @@ datatype.encodeVal = function encodeChar(val, type, struct, facet, isfieldprovid
 		// this enables NULLs in zset scores to be spotted iff keysuffix exists
 		return (val || 0);
 	}else{
-		return (charCodes[val] || val);
+		return (val in charCodes ? charCodes[val] : val);
 	}
 };
 
@@ -1049,7 +1049,7 @@ var inverseCharCodes = {};
 inverseCharCodes[null_character] = null;
 inverseCharCodes[empty_character] = '';
 datatype.decodeVal = function encodeChar(val, type, struct, facet){
-	return (inverseCharCodes[val] || val);
+	return (val in inverseCharCodes ? inverseCharCodes[val] : val);
 };
 
 // TODO: this and other such routines can be switched off iff cluster-instance choices don't need it

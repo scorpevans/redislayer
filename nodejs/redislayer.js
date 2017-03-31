@@ -178,6 +178,14 @@ Key objects also have a command-set depending on the Struct under which they are
 	/**
 	 * @return	{function}	see defaultgetter dict in dtree.js
 	 */
+	getDefaultFieldMinValueGetter: function(){return datatype.getFieldMinValueGetter();},
+	/**
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
+	getDefaultFieldMaxValueGetter: function(){return datatype.getFieldMaxValueGetter();},
+	/**
+	 * @return	{function}	see defaultgetter dict in dtree.js
+	 */
 	getDefaultFieldNextKeySuffixGetter: function(){return datatype.getFieldNextChainGetter();},
 
 	/**
@@ -185,6 +193,14 @@ Key objects also have a command-set depending on the Struct under which they are
 	 */
 	setDefaultClusterInstanceGetter: function(func){datatype.setClusterInstanceGetter(func);},
 
+	/**
+	 * @param	{function}	see getDefaultFieldNextKeySuffixGetter
+	 */
+	setDefaultFieldMinValueGetter: function(func){datatype.setFieldMinValueGetter(func);},
+	/**
+	 * @param	{function}	see getDefaultFieldNextKeySuffixGetter
+	 */
+	setDefaultFieldMaxValueGetter: function(func){datatype.setFieldMaxValueGetter(func);},
 	/**
 	 * @param	{function}	see getDefaultFieldNextKeySuffixGetter
 	 */

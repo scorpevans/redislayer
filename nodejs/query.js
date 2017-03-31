@@ -309,12 +309,12 @@ executeDecodeQuery = function executeDecodeQuery(meta_cmd, keys, key_field, inde
 					// FYI: this procedure also filters off keysuffixes excluded from the range e.g. partition fields
 					var joint = new comparison.joint(stopProp, null);	// stopProp defines variable keysuffixes/keychains
 					var configOrd = comparison.getConfigFieldOrdering(keyConfig, null, joint);
-					var order = comparison.getOrdProp(configOrd, 'order');
+					var fieldOrder = comparison.getOrdProp(configOrd, 'order');
 					var orderedKeyFieldSuffixes = [];
-					for(var i=0; i < order.length; i++){
+					for(var i=0; i < fieldOrder.length; i++){
 						for(var j=0; j < lastKeyFieldSuffixes.length; j++){
 							var fldIdx = lastKeyFieldSuffixes[j].fieldidx;
-							if(fldIdx == order[i]){
+							if(fldIdx == fieldOrder[i].fieldidx){
 								orderedKeyFieldSuffixes.push(lastKeyFieldSuffixes[j]);
 								break;
 							}
