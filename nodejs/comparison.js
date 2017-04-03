@@ -13,7 +13,7 @@ var unwrap = function unwrap(caller){
 
 
 // joints are specified with just a <from> and <to> field-names
-// because every other field on the LHS of <to> (i.e. high order) is included (except of course partition fields)
+// because every other field on the LHS of <from> (i.e. high order) is included (except of course partition fields)
 // fields between <from> and <to> are the focus of the join
 //	other LHS fields are assumed to be ordered, and would not be included in Ord
 //	this reduces administration of jointmaps on non-jointfields, especially when non-jointfields are later added to configs
@@ -202,7 +202,7 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 	var score = comparison.getOrdProp(ord, 'score');
 	var uid = comparison.getOrdProp(ord, 'uid');
 	var joints = comparison.getOrdProp(ord, 'joints');
-	var order = comparison.getOrdProp(ord, 'order');
+	var fieldOrder = comparison.getOrdProp(ord, 'order');
 	var fields = datatype.getConfigIndexProp(config, 'fields');
 	var partitions = datatype.getConfigIndexProp(config, 'partitions');
 	var jointPartitions = comparison.getJointPartitions(joint) || [];
@@ -241,16 +241,13 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 			mask = field;
 		}
 		var offset = datatype.getConfigPropFieldIdxValue(config, 'offsets', fieldIdx);
-		var cmp = [mask, offset, fieldIdx];
+		var cmp = {mask:mask, fieldidx:fieldIdx};
 		// joints
 		joints.push(mask);
 		// keytext
 	       	if(datatype.isConfigFieldKeySuffix(config, fieldIdx)){
 			var offsetGroup = datatype.getConfigPropFieldIdxValue(config, 'offsetgroups', fieldIdx);
 			if(offsetGroup == null || offsetGroup == fieldIdx){
-				if(datatype.isConfigFieldStrictlyKeySuffix(config, fieldIdx)){
-					cmp[1] = null;
-				}
 				keytext.push(cmp);
 			}
 		}
@@ -268,13 +265,21 @@ comparison.getConfigFieldOrdering = function getComparisonConfigFieldOrdering(co
 	// sort ord.score in descending order of the Factors; put nulls/0's as lowest (i.e. not participating)
 	score.sort(function(a,b){return (datatype.getConfigPropFieldIdxValue(config, 'factors', b[2]) || -Infinity)
 						- datatype.getConfigPropFieldIdxValue(config, 'factors', a[2]);});
-	// configure ordering
-	for(var i=0; i < score.length; i++){
-		order.push({mask:score[i][0], fieldidx:score[i][2]});
-	}
-	for(var i=0; i < uid.length; i++){
-		if(order.indexOf(uid[i][2]) < 0){
-			order.push({mask:uid[i][0], fieldidx:uid[i][2]});
+	// fieldOrder
+      	// the fieldOrder should be normalized so seemingly different keytext/score/uid parts can be seen to have the same comparison
+	// the definition of ordering chosen here, makes offsets of keytext unnecessary when merging ords or making comparisons
+	// keytext-fields must be the most significant since keychain retrieval must be made first
+	var conc = keytext.concat(score, uid);
+	for(var i=0; i < conc.length; i++){
+		var exists = false;
+		for(var j=0; j < fieldOrder.length; j++){
+			if(conc[i].mask == fieldOrder[j].mask){
+				exists = true;
+				break;
+			}
+		}
+		if(!exists){
+			fieldOrder.push(conc[i]);
 		}
 	}
 	return ord;
@@ -290,10 +295,11 @@ comparison.getComparison = function getComparison(order, ord, index, ref, index_
 	var fieldOrder = comparison.getOrdProp(ord, 'order');
 	for(var i=0; i < fieldOrder.length; i++){
 		var mask = fieldOrder[i].mask;
+		// indexes may have different translations of ord masks
 		var indexOrdMask = comparison.getMaskFieldMangle(index_fieldmask, mask, index_mangle);
 		var indexConfig = comparison.getOrdMaskConfig(ord, indexOrdMask);
-		var indexField = comparison.getOrdMaskField(ord, indexOrdMask);
-		var indexProp = comparison.getOrdMaskProp(ord, indexOrdMask);
+		var indexField = comparison.getOrdMaskField(ord, indexOrdMask);					// mask-field to config-field 
+		var indexProp = comparison.getOrdMaskProp(ord, indexOrdMask);					// mask-field to mangled-field
 		// indexOrdMask must have an entry in the Ord, and it's field-reference must exist in the Index
 		if(indexConfig == null || indexField == null || !(indexProp in index)){
 			throw new Error('missing index-mask-field or index-mask-config (for ['+indexOrdMask+']) or index-field (for ['+indexProp+']).');
@@ -323,7 +329,7 @@ comparison.getComparison = function getComparison(order, ord, index, ref, index_
 		}else if(indexVal > refVal){
 			return (order == asc ? '>' : '<');
 		}else if(indexVal != refVal){
-			utils.logError('comparison.getComparison, '+indexVal+', '+refVal, 'FATAL');
+			utils.logError('comparison.getComparison, fieldOrder, '+fieldOrder+', '+indexVal+', '+refVal, 'FATAL');
 			return null;
 		}
 	}

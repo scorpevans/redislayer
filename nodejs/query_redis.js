@@ -85,9 +85,9 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		var fieldIndex =  i;
 		var fieldVal = index[field];
 		var isFieldProvided = (field in (index || {}));
-		var splits = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
+		var split = datatype.splitConfigFieldValue(keyConfig, index, field) || [];
 		// key suffixes and branches
-		var fieldBranch = splits[2];
+		var fieldBranch = split.fieldbranch;
 		// NB: this must be parsed even if the value of the index.$field is <null>
 		// else how do you direct/indicate choice of key (for fieldBranches) for getter queries?!
 		var type = usual;
@@ -107,8 +107,8 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 			// this means once any offsetgroup field is given a value, it must be sufficient to define the keysuffix
 			if(!doneOffsetGroups[offsetGroupIndex]){
 				doneOffsetGroups[offsetGroupIndex] = true;
-				var valueFieldIdx = splits[3];	// the field within the offsetgroup whose value was used
-				var val = datatype.encodeVal(splits[0], type, struct, 'keysuffix', (offsetGroupIndex != null & offsetGroupIndex >= 0));
+				var valueFieldIdx = split.valuefieldidx;	// the field within the offsetgroup whose value was used
+				var val = datatype.encodeVal(split.keysuffix, type, struct, 'keysuffix', (offsetGroupIndex != null & offsetGroupIndex >= 0));
 				var elem = {keysuffix:val, fieldidx:fieldIndex, valuefieldidx:valueFieldIdx};
 				registerStructElement(type, keyFieldSuffixes, elem, fieldIndex, keyConfig);
 			}
@@ -118,7 +118,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		if(datatype.isConfigFieldUIDPrepend(keyConfig, fieldIndex)){
 			// for zset, prefix floats with special-characters so they maintain their sorting; see datatype.getConfigOrdering
 			var mytype = datatype.getConfigPropFieldIdxValue(keyConfig, 'types', fieldIndex);
-			var pad = datatype.processPaddingForZsetUID(struct, mytype, splits[1]);
+			var pad = datatype.processPaddingForZsetUID(struct, mytype, split.offsetvalue);
 			var val = datatype.encodeVal(pad, type, struct, 'uid', isFieldProvided);
 			var elem = {uid:val, fieldidx:fieldIndex};
 			registerStructElement(type, uidPrefixes, elem, fieldIndex, keyConfig);
@@ -126,13 +126,13 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 		if(struct == 'zset'){
 			if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
 				if(datatype.isConfigFieldScoreAddend(keyConfig, fieldIndex)){
-					var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided); 
+					var val = datatype.encodeVal(split.offsetvalue, type, struct, 'xid', isFieldProvided); 
 					var elem = {xid:val, fieldidx:fieldIndex};
 					registerStructElement(type, xidPrefixes, elem, fieldIndex, keyConfig);
 				}
 			}
 		}else if(!datatype.isConfigFieldStrictlyUIDPrepend(keyConfig, fieldIndex)){	// i.e. definition of XID vs. UID
-			var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+			var val = datatype.encodeVal(split.offsetvalue, type, struct, 'xid', isFieldProvided);
 			var elem = {xid:val, fieldidx:fieldIndex};
 			registerStructElement(type, xidPrefixes, elem, fieldIndex, keyConfig);
 		}
@@ -153,7 +153,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 						next_pvf = outOfBounds;
 					}
 					// NB: for Scores 0 and NULL cannot be distinguished
-					var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+					var val = datatype.encodeVal(split.offsetvalue, type, struct, 'xid', isFieldProvided);
 					if(val == null){
 						val = label_lua_nil;
 					}
@@ -161,7 +161,7 @@ query_redis.parseIndexToStorageAttributes = function parseQueryIndexToRedisStora
 					registerStructElement(type, luaArgs, elem, fieldIndex, keyConfig);
 				}
 			}else{
-				var val = datatype.encodeVal(splits[1], type, struct, 'xid', isFieldProvided);
+				var val = datatype.encodeVal(split.offsetvalue, type, struct, 'xid', isFieldProvided);
 				if(val == null){
 					val = label_lua_nil;
 				}
@@ -383,7 +383,7 @@ query_redis.parseStorageAttributesToIndex = function parseRedisStorageAttributes
 				}
 				suffix = datatype.decodeVal(suffix, type, struct, 'keysuffix');
 				index[field] = datatype.decodeVal(index[field], type, struct, facet)
-				index[field] =  datatype.unsplitFieldValue([suffix, index[field]], fieldOffset);
+				index[field] =  datatype.unsplitFieldValue({keysuffix:suffix, offsetvalue:index[field]}, fieldOffset);
 			}else{
 				delete index[field];		// key_text is required to complete value
 				continue;
@@ -471,12 +471,12 @@ getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_con
 				if(boundValue != null){
 					boundIndex[boundProp] = boundValue;
 				}
-				var splits = datatype.splitConfigFieldValue(key_config, boundIndex, boundProp);
-				var origKS = splits[0];
+				var split = datatype.splitConfigFieldValue(key_config, boundIndex, boundProp);
+				var origKS = split.keysuffix;
 				var isBefore = datatype.isKeyFieldChainWithinBound(key_config, boundPropIdx, range_order, origKS, boundKS);
 				var isAfter = datatype.isKeyFieldChainWithinBound(key_config, boundPropIdx, range_order, boundKS, origKS);
 				if(isBefore && isAfter){								// i.e. equality
-					boundValue = splits[1];
+					boundValue = split.offsetvalue;
 				}else if(boundPropFlag == 'startProp' ? isBefore : isAfter){				// match everything within the prop's scope
 					if(valuetype == 'score'){
 						var boundPrefactor = datatype.getConfigFieldPrefactor(key_config, boundPropIdx);

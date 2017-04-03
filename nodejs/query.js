@@ -82,19 +82,20 @@ parseClusterInstanceIndexToStorageAttributes = function parseClusterInstanceInde
 // NB: the order of key_field_suffixes is crucial
 //	it should reflect the same case as if only a single key was used
 //	hence Score fields should precede Member fields
-getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_field_suffixes, limit, then){
+getKeyChain = function getQueryKeyChain(cmd, index, keys, key_type, key_field, key_field_suffixes, limit, then){
 	if(!((key_field_suffixes || []).length > 0)){
 		return [];
 	}
 	if(limit == null || limit > query.const_limit_default){
 		limit = query.const_limit_default;
 	}
+	var indexCopy = utils.shallowCopy(index);
 	var key = keys[0];
 	var fields = datatype.getConfigIndexProp(key_type, 'fields');
 	var config = datatype.getKeyConfig(key);
 	var cmdOrder = command.getOrder(cmd); 
 	var keyChain = [];
-	var arg = {key:key, limit:limit, order:cmdOrder};
+	var arg = {key:key, index:indexCopy, limit:limit, order:cmdOrder};
 	var keyChainGetters = [];
 	var idx = key_field_suffixes.length-1;
 	var resetIdxCounter = [];
@@ -104,10 +105,11 @@ getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_fiel
 		return (idx >= 0 && keyChain.length < limit);
 	},function(callback){
 			var kfs = key_field_suffixes[idx];
+			var keysuffix = datatype.decodeVal(kfs.keysuffix, null, 'zset', 'keysuffix');	// functions may not expect encodings
 			var fieldIdx = kfs.fieldidx;
 			var field = fields[fieldIdx];
 			arg.field = field;
-			arg.keysuffix = (resetIdxCounter[idx] ? null : kfs.keysuffix);
+			arg.keysuffix = (resetIdxCounter[idx] ? null : keysuffix);
 			var keyChainGetter = keyChainGetters[idx];
 			if(!keyChainGetter){
 				keyChainGetters[idx] = datatype.getKeyFieldNextChainGetter(key, field);
@@ -121,7 +123,7 @@ getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_fiel
 					for(var i=0; i < chainLen; i++){
 						if(!nextMinorKeySuffix){				// the least significant keysuffix
 							var bucket = key_field_suffixes.map(function(ks){return utils.shallowCopy(ks);});
-							bucket[idx].keysuffix = datatype.encodeVal(nextChain[i], null, null, 'keysuffix', true);
+							bucket[idx].keysuffix = datatype.encodeVal(nextChain[i], null, 'zset', 'keysuffix', true);
 							keyChain.push(bucket);
 						}else{	// for higher significant keysuffixes, just (in/de)crement keysuffix
 							kfs.keysuffix = nextChain[i];
@@ -135,12 +137,12 @@ getKeyChain = function getQueryKeyChain(cmd, keys, key_type, key_field, key_fiel
 						return then(noSuffixFound, null);
 					}else if(chainLen < arg.limit){
 						resetIdxCounter[idx] = true;
-						idx = idx-1;					// move to next significant keysuffix
-						arg.limit = 1;					// only one element required to reset counter
+						idx = idx-1;						// move to next significant keysuffix
+						arg.limit = 1;						// only one element required to reset counter
 					}else if(nextMinorKeySuffix){
 						resetIdxCounter[idx] = false;
-						idx = idx+1; 					// move to the next less significant keysuffix
-						arg.limit = (secondMinorKeySuffix ? 1 : limit); // limit is restored on the least significant keysuffix
+						idx = idx+1; 						// move to the next less significant keysuffix
+						arg.limit = (secondMinorKeySuffix ? 1 : limit); 	// limit is restored on the least significant keysuffix
 					}
 				}
 				callback(err);
@@ -307,14 +309,13 @@ executeDecodeQuery = function executeDecodeQuery(meta_cmd, keys, key_field, inde
 					// NB: the order of key_field_suffixes is crucial; see comparison.getConfigFieldOrdering
 					// make a first-time ordering of the keysuffix fields according to storage ordering
 					// FYI: this procedure also filters off keysuffixes excluded from the range e.g. partition fields
-					var joint = new comparison.joint(stopProp, null);	// stopProp defines variable keysuffixes/keychains
-					var configOrd = comparison.getConfigFieldOrdering(keyConfig, null, joint);
-					var fieldOrder = comparison.getOrdProp(configOrd, 'order');
+					var configOrd = comparison.getConfigFieldOrdering(keyConfig, null, null);
+					var keySuffixOrder = comparison.getOrdProp(configOrd, 'order');
 					var orderedKeyFieldSuffixes = [];
-					for(var i=0; i < fieldOrder.length; i++){
+					for(var i=0; i < keySuffixOrder.length; i++){
 						for(var j=0; j < lastKeyFieldSuffixes.length; j++){
 							var fldIdx = lastKeyFieldSuffixes[j].fieldidx;
-							if(fldIdx == fieldOrder[i].fieldidx){
+							if(fldIdx == keySuffixOrder[i].fieldidx){
 								orderedKeyFieldSuffixes.push(lastKeyFieldSuffixes[j]);
 								break;
 							}
@@ -336,7 +337,7 @@ executeDecodeQuery = function executeDecodeQuery(meta_cmd, keys, key_field, inde
 							if(range_config.stopValue != null){
 								var stopIndex = utils.shallowCopy(index);
 								stopIndex[stopProp] = range_config.stopValue;
-								skfs.keysuffix = datatype.splitConfigFieldValue(keyConfig, stopIndex, stopProp)[0];
+								skfs.keysuffix = datatype.splitConfigFieldValue(keyConfig, stopIndex, stopProp).keysuffix;
 							}
 						}
 						break;
@@ -360,7 +361,7 @@ executeDecodeQuery = function executeDecodeQuery(meta_cmd, keys, key_field, inde
 				if(idx >= chainedKeyFieldSuffixes.length-1){
 					// get next keys in the chain
 					idx = 0;
-					getKeyChain(cmd, keys, keyConfig, key_field, lastKeyFieldSuffixes, limit, function(err, result){
+					getKeyChain(cmd, index, keys, keyConfig, key_field, lastKeyFieldSuffixes, limit, function(err, result){
 						if(!utils.logCodeError(err, result)){
 							chainedKeyFieldSuffixes = result.data;
 							var newKeyFieldSuffixes = chainedKeyFieldSuffixes[0] || [];
@@ -661,7 +662,7 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 					indexClone[prop] = (propValue || [])[0];		// null or singular value
 				}else if(!datatype.isConfigFieldPartitioned(keyConfig, propIndex)){
 					// without declaration, it's assumed array is indeed raw value
-					// this should also apply to stray/extraneous props
+					// this should also apply to stray/extraneous props; they are ignored
 					continue;
 				}else{
 					// partitions must be handled well w.r.t. the query-range else duplicate fetches would be made
@@ -691,9 +692,9 @@ query.singleIndexQuery = function getSingleIndexQuery(cmd, key, index_or_rc, att
 								var myIndex = {};
 								for(var j=0; j < propValue.length; j++){
 									myIndex[prop] = propValue[j];
-									var splits = datatype.splitConfigFieldValue(keyConfig, myIndex, prop);
-									if(!(splits[0] in keysuffixes)){
-										keysuffixes[splits[0]] = true;
+									var split = datatype.splitConfigFieldValue(keyConfig, myIndex, prop);
+									if(!(split.keysuffix in keysuffixes)){
+										keysuffixes[split.keysuffix] = true;
 										uniq.push(propValue[j]);
 									}
 								}

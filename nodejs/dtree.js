@@ -85,6 +85,7 @@ var dtree = {
 		 * @param	{object}	arg - a dict
 		 * @param	{object}	arg.key - the key in question
 		 * @param	{object}	arg.field - the field in question
+		 * @param	{object}	arg.index - a copy of the data-dict associated with the query
 		 * @param	{string}	arg.keysuffix - the value from which to search exclusively; null value means start from the beginning
 		 * @param	{string}	arg.order - getAscendingOrderLabel() or getDescendingOrderLabel();  indicating the direction of search
 		 * @param	{int}		arg.limit - the number of keysuffixes to return 

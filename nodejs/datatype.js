@@ -39,6 +39,7 @@ var	asc = '_label_ascending',						// direction of ranging -- typically over sor
 				}),
 	default_get_field_next_chain = (function(arg, then){			// returns next chain after given value
 				var key = arg.key;
+				var index = arg.index;
 				var field = arg.field;
 				var keysuffix = arg.keysuffix;			// exclusive keysuffix cursor
 				var order = arg.order;
@@ -94,14 +95,12 @@ var	asc = '_label_ascending',						// direction of ranging -- typically over sor
 					// if input keysuffix== null, process generated start-value
 					var startKS = start;
 					if(keysuffix == null){
-						var index = {};
 						index[field] = start;
 						var keySuffixIndex = datatype.getKeyFieldSuffixIndex(key, field, index);
 						startKS = keySuffixIndex[field];
 						keychain.push(startKS);
 					}
 					// get the keysuffix corresponding to the stop-value
-					var index = {};
 					index[field] = stop;
 					var keySuffixIndex = datatype.getKeyFieldSuffixIndex(key, field, index);
 					var stopKS = keySuffixIndex[field];
@@ -847,13 +846,12 @@ datatype.splitConfigFieldValue = function datatypeSplitConfigFieldValue(config, 
 			split[1] = null;								// non-null val was taken from an offsetgroup-field
 		}
 	}
-	[].push.apply(split, [fieldBranch, valueFieldIdx]);
-	return split;
+	return {keysuffix:split[0], offsetvalue:split[1], fieldbranch:fieldBranch, valuefieldidx:valueFieldIdx};
 };
 
 datatype.unsplitFieldValue = function datatypeUnsplitFieldValue(split, offset){
 	// NB: values passed to this function are already decoded by caller
-	if(split[0] == null || split[1] == null){
+	if(split.keysuffix == null || split.offsetvalue == null){
 		return null;		// if NULL is stored as keysuffix => total value was null
 	}
 	// some keysuffixes subsume keysuffixes of some members of the offsetgroups
@@ -869,22 +867,22 @@ datatype.unsplitFieldValue = function datatypeUnsplitFieldValue(split, offset){
 	var isMultiSplit = (hasInfo && isOffsetted);
 	if(offset < 0){
 		var prefixOffset = (offset == null || offset == -Infinity ? offset : offset%100);
-		var innerSplit = splitID(split[0], prefixOffset);
+		var innerSplit = splitID(split.keysuffix, prefixOffset);
 		var prefixInfo = (innerSplit[0] != null ? innerSplit[0] : '');
 		var stemSplit = '';
 		if(isMultiSplit){
 			stemSplit = (innerSplit[1] != null ? innerSplit[1] : '');
 		}
-		return (prefixInfo+stemSplit+(split[1] != null ? split[1] : ''));
+		return (prefixInfo+stemSplit+(split.offsetvalue != null ? split.offsetvalue : ''));
 	}else if(offset > 0){
 		var trailOffset = (offset == null || offset == Infinity ? offset : offset%100);
-		var innerSplit = splitID(split[0], trailOffset);
+		var innerSplit = splitID(split.keysuffix, trailOffset);
 		var stemSplit = '';
 		if(isMultiSplit){
 			stemSplit = (innerSplit[0] != null ? innerSplit[0] : '');
 		}
 		var trailInfo = (innerSplit[1] != null ? innerSplit[1] : '');
-		return (stemSplit+(split[1] != null ? split[1] : '')+trailInfo);
+		return (stemSplit+(split.offsetvalue != null ? split.offsetvalue : '')+trailInfo);
 	}
 };
 
@@ -1066,7 +1064,7 @@ datatype.getKeyFieldSuffixIndex = function getDatatypeKeyFieldSuffixIndex(key, f
 			// in field-branches, only UID components which are not field branches, and the branched field are applicable
 			if(field_branch == null || fld == field_branch
 				|| (!datatype.isConfigFieldBranch(config, fldIdx) && datatype.isConfigFieldUIDPrepend(config, fldIdx))){
-				var ks = datatype.splitConfigFieldValue(config, index, fld)[0];
+				var ks = datatype.splitConfigFieldValue(config, index, fld).keysuffix;
 				var type = datatype.getConfigPropFieldIdxValue(config, 'types', fldIdx);
 				var struct = datatype.getConfigStructId(config);
 				keySuffixIndex[fld] = datatype.encodeVal(ks, type, struct, 'keysuffix', true);

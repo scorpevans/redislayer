@@ -437,7 +437,7 @@ case 10:
 	joinConfig.setModeList();
 	joinConfig.streamConfigs = [case8Stream, case9Stream];
 	joinConfig.joint = new rl.joint(null, 'memberid');		// the from-to range that the join focuses on
-	joinConfig.limit = 100;						// NB: this is useful even in case of modeCount()
+	joinConfig.limit = 20;						// increase limit to say 500 in order to see query across keychains/clusters
 	if(cases[sequence] == 10){
 		console.log('\n#### CASE 10: inner-join the ranges from cases 8 and 9 ####');
 		rl.mergeStreams({joinconfig:joinConfig}, function(err, result){

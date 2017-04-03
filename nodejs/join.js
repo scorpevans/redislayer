@@ -113,6 +113,20 @@ mergeOrds = function mergeOrds(ord, myord, namespace, stream_joint_mangle, strea
 		comparison.resetOrdMasks(ord);
 	}else{
 		ordFieldMask = comparison.getOrdProp(ord, 'fieldmask');
+		// ords can be merged only if their orderings are comparable
+		var fieldOrder = comparison.getOrdProp(ord, 'order');
+		var myFieldOrder = comparison.getOrdProp(myord, 'order');
+		for(var k=0; k < fieldOrder.length; k++){
+			if(myFieldOrder[k].mask != fieldOrder[k].mask){
+				var err = 'stream '+stream_idx+' does not have the same ordering with previous streams';
+				throw new Error(err);
+			}
+			// merged ords may have different fieldidx for the field-mappings
+			// fieldidx prop in field-orders is invalidated
+			if('fieldidx' in fieldOrder[k]){
+				delete fieldOrder[k].fieldidx;
+			}
+		}
 	}
 	for(var i=0; i < ordFieldMasks.length; i++){
 		var fieldMask = ordFieldMasks[i];
@@ -173,25 +187,6 @@ createJoinOrd = function createJoinOrd(joinType, joint, streamIndexes, streamPro
 		streamJointMangles[str] = {};
 		var namespace = streamConfigs[str].namespace;
 		ord = mergeOrds(ord, myord, namespace, streamJointMangles[str], str);
-		// check that ords of all streamConfigs are comparable
-		if(ords.length > 1){
-			var prevOrd = ords[ords.length-2];
-			var fo1 = comparison.getOrdProp(myord, 'order');
-			var fo2 = comparison.getOrdProp(prevOrd, 'order');
-			var isCongruent = (fo1.length == fo2.length);
-			for(var k=0; (isCongruent && k < fo1.length); k++){
-				if(fo1[k].mask != fo2[k].mask){
-					isCongruent = false;
-				}
-			}
-			if(!isCongruent){
-				var prevStr = streamIndexes[str+1];	// +1 due to backward iteration
-				var func1 = streamConfigs[prevStr].func.name || '';
-				var func2 = streamConfigs[str].func.name || '';
-				var err = func1+' (streams '+(prevStr)+') and '+func2+' (stream '+str+') do not have the same ordering';
-				throw new Error(err);
-			}
-		}
 	}
 	return ord;
 };
