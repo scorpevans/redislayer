@@ -202,7 +202,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 		streamOrder = joinConfigDict.order,
 		streamConfigs = join_config.streamConfigs,
 		joint = join_config.joint,
-		limit = join_config.limit;
+		limit = (join_config.limit == '' ? null : join_config.limit);
 	var streamProps = [];
 	for(var i=0; i < streamConfigs.length; i++){
 		streamProps[i] = {};
@@ -241,7 +241,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 	var boundIndexMask = {};
 	var innerJoinCount = 0;
 	var refreshIdx = null;				// the index of streamIndexes where joins are left off to fetch data
-	var ord = null;					// the merges ord of the rangeconfigs
+	var ord = null;					// the merged ord of the rangeconfigs
 	var streamJointMangles = [];			// mangle info while merging ords
 	var streamJointMaps = [];			// the merge of the inner and outer jointMaps
 	var getMaskedMangledStreamField = function(jmask, str){
@@ -258,7 +258,9 @@ join.mergeStreams = function mergeStreams(join_config, then){
 	}
 	var loopCount = 0;
 	async.whilst(
-	function(){return (((isRangeCount && joinData < limit) || joinData.length < limit) && streamIndexes.length > 0);},
+	function(){
+		return (((isRangeCount && joinData < limit) || joinData.length < limit) && streamIndexes.length > 0);
+	},
 	function(callback){
 		loopCount++;
 		if(loopCount > join.max_loops){
@@ -385,7 +387,7 @@ join.mergeStreams = function mergeStreams(join_config, then){
 							var newCursorIndex = null;
 							if(joinType == 'fulljoin'){
 								newCursorIndex = streamProps[str].results[idx-1];
-								cursorReln = '=';		// next resultset has to be '>' newCursorIndex
+								cursorReln = '=';		// next resultset has to be '>' newCursorIndex TODO assumes 1 to 1 joins
 							}else if(joinType == 'innerjoin'){
 								if(str == boundIndexStr){
 									newCursorIndex = boundIndex;
@@ -403,15 +405,19 @@ join.mergeStreams = function mergeStreams(join_config, then){
 									}
 								}
 							}
-							var oldCursor = streamProps[str].argsCopy[cursorIdx];
-							if(oldCursor == null){
-								oldCursor = new query.rangeConfig(newCursorIndex);
-								streamProps[str].argsCopy[cursorIdx] = oldCursor;
-							}else if(utils.isObjectEmpty(oldCursor.index)){
-								oldCursor.index = newCursorIndex;
+							var oldCursorClone = streamProps[str].argsCopy[cursorIdx].clone();	// use a shallowCopy for mutation
+							streamProps[str].argsCopy[cursorIdx] = oldCursorClone;			// attached clone
+							// use entire index-cursor point
+							oldCursorClone.startProp = null;
+							oldCursorClone.startValue = null;
+							if(oldCursorClone == null){
+								oldCursorClone = new query.rangeConfig(newCursorIndex);
+								streamProps[str].argsCopy[cursorIdx] = oldCursorClone;
+							}else if(utils.isObjectEmpty(oldCursorClone.index)){
+								oldCursorClone.index = newCursorIndex;
 							}else{	// NB: keep partitioned-field values (e.g. [0,1]) intact
-								// mutate newCursorIndex instead; oldCursor points to other objects
-								for(var fld in oldCursor.index){
+								// FYI: mutate newCursorIndex instead; oldCursorClone points to other objects
+								for(var fld in oldCursorClone.index){
 									// copy partitioned-field values from old cursor
 									var fldMangle = streamJointMangles[str][fld] || fld;
 									var fldConfig = comparison.getOrdMaskConfig(ord, fldMangle);
@@ -422,15 +428,15 @@ join.mergeStreams = function mergeStreams(join_config, then){
 									var fldField = comparison.getOrdMaskField(ord, fldMangle);
 									var fldIdx = datatype.getConfigFieldIdx(fldConfig, fldField);
 									if(datatype.isConfigFieldPartitioned(fldConfig, fldIdx)){
-										newCursorIndex[fld] = oldCursor.index[fld];
+										newCursorIndex[fld] = oldCursorClone.index[fld];
 									}
 								}
-								oldCursor.index = newCursorIndex;
+								oldCursorClone.index = newCursorIndex;
 							}
 							if(cursorReln == '<'){
-								oldCursor.excludeCursor = false;
+								oldCursorClone.excludeCursor = false;
 							}else{
-								oldCursor.excludeCursor = true;
+								oldCursorClone.excludeCursor = true;
 							}
 							// initiate refresh
 							refreshIdx = i;		// continue from this iteration
@@ -493,11 +499,12 @@ join.mergeStreams = function mergeStreams(join_config, then){
 									var streamFld = mmsf.streamFld;
 									// when join expressions exist, joints have to be computed further
 									// boundIndexMask would be set to that result instead
+									// TODO expressions should yield new separate fields instead
 									if(expression == null){
 										boundIndexMask[jmask] = index[streamFld];
 										// update ord with info about synthetic field
 										comparison.addOrdMaskFromClone(ord, jmask, mangleFld);
-									}/*else{ expressions are not implemented
+									}/*else{ TODO expressions are not implemented
 									}*/
 								}
 							}

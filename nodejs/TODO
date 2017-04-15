@@ -1,3 +1,9 @@
+debug: indexListQuery sometimes returns NULL instead of []
+
+implement Join expressions i.e. computed fields on joins
+
+make simple checks on interface functions to ensure that parameters are sanitized
+
 capture UIDs separately from member-suffixes for zset; this help abstract better CRUD commands
 e.g. some get-commands have to be a range if additional info is appended to the member
 

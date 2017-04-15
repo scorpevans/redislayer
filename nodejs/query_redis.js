@@ -425,14 +425,20 @@ getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_con
 		// NB: without an index-prop, there's no config reference for processing (e.g. for keysuffix)
 		var value = range_config[boundValueFlag];
 		if(valuetype == 'score'){
-			value = (range_config.excludeCursor ? '(' : '') + value;
+			value = (range_config.excludeCursor && boundValueFlag == 'startProp' ? '(' : '') + value;
 		}else if(valuetype == 'member'){
 			// prepending bound operator is required by redis API for .bylex commands
-			value = (range_config.excludeCursor ? '(' : '[') + value;
+			value = (range_config.excludeCursor && boundValueFlag == 'startProp' ? '(' : '[') + value;
 		}
 		return value;
 	}else if(range_config.index == null){
-		return (range_order == asc ? ascExtremePosition : descExtremePosition);
+		var value = (range_order == asc ? ascExtremePosition : descExtremePosition);
+		if(valuetype == 'score'){
+			value = ''+value;
+		}else if(valuetype == 'member'){
+			value = '['+value;
+		}
+		return value;
 	}
 	var boundProp = range_config[boundPropFlag];
 	var boundValue = range_config[boundValueFlag];
@@ -535,12 +541,13 @@ getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_con
 			// skipping the score would be wrong for .byscorelex commands
 			// since it is the uid/member value which should be skipped in this case
 			// excludecursor instead of range_config.excludeCursor is introduced to regulate this
+			// NB: in the case of stopProp, excludecursor doesn't apply <=> excludeCursor affect startProp only
 			if(truncated){
 				var high = 0;
-				if((boundPropFlag == 'startProp' && !excludecursor) || (boundPropFlag == 'stopProp' && excludecursor)){
-					high = (range_order == asc ? 0 : 1);
-				}else if((boundPropFlag == 'stopProp' && !excludecursor) || (boundPropFlag == 'startProp' && excludecursor)){
+				if(excludecursor || boundPropFlag == 'stopProp'){
 					high = (range_order == asc ? 1 : 0);
+				}else{
+					high = (range_order == asc ? 0 : 1);
 				}
 				var low = 0;
 				if((boundPropFlag == 'startProp' && range_order == asc) || (boundPropFlag == 'stopProp' && range_order != asc)){
@@ -550,12 +557,8 @@ getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_con
 				}
 				value = value + datatype.getFactorizedConfigFieldValue(key_config, boundPropIdx, high) + low;
 			}else{
-				if(excludecursor){
-					if(boundPropFlag == 'startProp'){
-						value = value + (range_order == asc ? 1 : -1);
-					}else if(boundPropFlag == 'stopProp'){
-						value = value + (range_order == asc ? -1 : 1);
-					}
+				if(excludecursor || boundPropFlag == 'stopProp'){
+					value = value + (range_order == asc ? 1 : -1);
 				}
 			}
 		}else if(valuetype == 'member'){
@@ -566,19 +569,15 @@ getKeyRangeBoundValue = function getQueryKeyRangeBoundValue(range_order, key_con
 			value = '['+value;
 			if(truncated){	// use the left and right char of the separator_detail to delimit range
 				var delimiter = '';
-				if((boundPropFlag == 'startProp' && !excludecursor) || (boundPropFlag == 'stopProp' && excludecursor)){
-					delimiter = (range_order == asc ? getPreviousCodeWord(separator_detail) : getNextCodeWord(separator_detail));
-				}else if((boundPropFlag == 'stopProp' && !excludecursor) || (boundPropFlag == 'startProp' && excludecursor)){
+				if(excludecursor || boundPropFlag == 'stopProp'){
 					delimiter = (range_order == asc ? getNextCodeWord(separator_detail) : getPreviousCodeWord(separator_detail));
+				}else{
+					delimiter = (range_order == asc ? getPreviousCodeWord(separator_detail) : getNextCodeWord(separator_detail));
 				}
 				value = value + delimiter;
 			}else{	// just (in/de)crement last char of value in case of excludecursor
-				if(excludecursor){
-					if(boundPropFlag == 'startProp'){
-						value = (range_order == asc ? getNextCodeWord(value) : getPreviousCodeWord(value));
-					}else if(boundPropFlag == 'stopProp'){
-						value = (range_order == asc ? getPreviousCodeWord(value) : getNextCodeWord(value));
-					}
+				if(excludecursor || boundPropFlag == 'stopProp'){
+					value = (range_order == asc ? getNextCodeWord(value) : getPreviousCodeWord(value));
 				}
 			}
 		}
@@ -829,7 +828,7 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, rangeConfig, attribute, f
 				startScore = parseFloat(startScore.slice(1), 10);
 			}
 			startScore = scoreMap[startScore] || startScore;
-			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, null);
+			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, rangeConfig.excludeCursor);
 			if(stopScore && stopScore[0] == '('){
 				stopScore = parseFloat(stopScore.slice(1), 10);
 			}
@@ -841,7 +840,7 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, rangeConfig, attribute, f
 				startMember = startMember.slice(1);
 			}
 			startMember = memberMap[startMember] || startMember;
-			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, null);
+			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
 			if(stopMember && stopMember[0] == '['){
 				stopMember = stopMember.slice(1);
 			}
@@ -856,7 +855,7 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, rangeConfig, attribute, f
 			var negInf = (cmdOrder == asc ? '-' : '+');
 			var posInf = (cmdOrder == asc ? '+' : '-');
 			var startMember = getKeyRangeStartMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
-			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, null);
+			var stopMember = getKeyRangeStopMember(cmdOrder, keyConfig, rangeConfig, uidPrefixes, keySuffixes, rangeConfig.excludeCursor);
 			if(utils.startsWith(cmdType, 'countbylex') && startMember == negInf && stopMember == posInf){
 				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
 			}else{
@@ -869,7 +868,7 @@ query_redis.getCIQA = function getCIQA(meta_cmd, keys, rangeConfig, attribute, f
 			var negInf = (cmdOrder == asc ? '-inf' : '+inf');
 			var posInf = (cmdOrder == asc ? '+inf' : '-inf');
 			var startScore = getKeyRangeStartScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, rangeConfig.excludeCursor);
-			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, null);
+			var stopScore = getKeyRangeStopScore(cmdOrder, keyConfig, rangeConfig, xidPrefixes, keySuffixes, rangeConfig.excludeCursor);
 			if(utils.startsWith(cmdType, 'countbyscore') && startScore == negInf && stopScore == posInf){
 				cmd = command.getMode(datatype.getConfigCommand(keyConfig).count).bykey;
 			}else{

@@ -99,12 +99,12 @@ Key objects also have a command-set depending on the Struct under which they are
 	 */
 	getCollisionBreaker: datatype.getCollisionBreaker,
 	/**
-	 * @return	{string}	see getDetailSeparator
+	 * @return	{string}	the string used to join data of fields e.g. '|' as in evans:akai:bekoe
 	 */
 	getDetailSeparator: datatype.getDetailSeparator,
 
 	/**
-	 * @return	{number}	the maximum 
+	 * @return	{number}	the maximum power of 10 which can be stored in the redis Score
 	 */
 	getRedisMaxScoreFactor: datatype.getRedisMaxScoreFactor,
 
@@ -267,9 +267,9 @@ A query Attributes is an object with a subset of the following redis attributes 
 	 * @param	{object}	arg - a dict
 	 * @param	{object}	arg.cmd - select a command from $key.getCommand()
 	 * @param	{object}	arg.key - a key
-	 * @param	{object}	arg.indexList - a list of objects
-	 * @param	{object}	arg.indexList.index - an index
-	 * @param	{object}	arg.indexList.attribute - an attribute
+	 * @param	{object}	arg.indexlist - a list of objects
+	 * @param	{object}	arg.indexlist.index - an index
+	 * @param	{object}	arg.indexlist.attribute - an attribute
 	 * @param	{resultsetCallback}	callback handler
 	 */
 	indexListQuery: function indexListQuery(arg, then){
